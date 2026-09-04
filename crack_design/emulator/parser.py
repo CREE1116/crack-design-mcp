@@ -360,7 +360,14 @@ def parse_image_rule(main_prompt: str) -> ImageRule:
 
     # Only claim the every-turn / every-line duties where the prompt asks for
     # them in so many words; a build that never says so is not held to them.
-    scene_codes = sorted(set(re.findall(r"bg(\d{2})", main_prompt)))
+    # Either spelled out per entry (bg01로비 …) or declared once and then listed
+    # as bare numbers (배경(bgNN)=01로비 02복도 …), which is how a build fits the
+    # table inside the character budget.
+    scene_codes = set(re.findall(r"bg(\d{2})", main_prompt))
+    table = re.search(r"배경\(bgNN\)\s*=\s*([^\n]+)", main_prompt)
+    if table:
+        scene_codes |= set(re.findall(r"(?:^|\s)(\d{2})", table.group(1)))
+    scene_codes = sorted(scene_codes)
     require_scene = bool(re.search(
         r"배경[^\n]{0,20}(?:매\s?응답|매\s?턴)[^\n]{0,20}(?:필수|반드시)"
         r"|(?:매\s?응답|매\s?턴)[^\n]{0,20}배경[^\n]{0,20}(?:필수|반드시)", main_prompt))
