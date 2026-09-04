@@ -259,6 +259,13 @@ class Server:
                 "dropped": [{"title": x.entry.title, "matched": x.matched,
                              "where": x.where, "chars": x.entry.char_count}
                             for x in p.dropped],
+                # play_turn names the matched shortcut; this reported nothing,
+                # so an agent could see the injected text without being told
+                # which shortcut put it there.
+                "shortcut": ({"id": p.shortcut.id, "name": p.shortcut.name,
+                              "description": p.shortcut.description,
+                              "prompt": p.shortcut.prompt}
+                             if p.shortcut else None),
                 "live_turns": len(memory.live_turns(s, window)),
                 "evicted_turns": len(memory.evicted_turns(s, window))}
 
