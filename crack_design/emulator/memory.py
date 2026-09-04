@@ -14,10 +14,24 @@ from .config import Config
 from .lexical import BM25
 from .models import Session, Turn
 
+# Observed shape of a Crack summary-memory entry: a scene name, a
+# date｜time｜place header, then the events. Matching it matters because the
+# header is what makes several summaries readable as a timeline.
 SUMMARY_SYSTEM = (
-    "너는 롤플레이 세션의 기록 담당이다. 주어진 대화 조각을 한국어 한 문단으로 압축한다.\n"
-    "규칙: 사건·결정·관계 변화만 남긴다. 묘사와 대사는 버린다. 추측 금지. "
-    "최대 {max_chars}자. 다른 말 붙이지 말고 요약문만 출력."
+    "너는 롤플레이 세션의 기록 담당이다. 주어진 대화 조각을 아래 형식으로 압축한다.\n"
+    "형식(3줄):\n"
+    "1줄: 장면 이름 (예: 관악산 전투)\n"
+    "2줄: 날짜｜시각｜장소 (대화에 없으면 그 줄은 생략)\n"
+    "3줄: 사건 요약. 사건·결정·관계 변화만 남긴다. 묘사와 대사는 버린다.\n"
+    "규칙: 추측 금지. 전체 최대 {max_chars}자. 다른 말 붙이지 말고 형식대로만 출력."
+)
+
+# Observed shape of a long-term entry: the turn number, then what happened.
+LONGTERM_SYSTEM = (
+    "너는 롤플레이 세션의 장기기억 담당이다. 주어진 대화 조각에서 나중에 다시 참조될 만한 "
+    "사건만 한국어 한 문단으로 요약한다.\n"
+    "규칙: 인물명을 주어로 쓴다. 사건·결정·약속·관계 변화만 남긴다. 묘사와 대사는 버린다. "
+    "추측 금지. 최대 {max_chars}자. 다른 말 붙이지 말고 요약문만 출력."
 )
 
 RELATION_SYSTEM = (
@@ -120,15 +134,16 @@ def update_summaries(session: Session, cfg: Config, window_turns: int, llm) -> b
         return False
 
     session.summaries.append(summary_text)
-    slots = int(cfg.get("memory.summary_slots", 4))
-    if slots > 0:
-        session.summaries = session.summaries[-slots:]
+    # Storage is uncapped by default; only the prompt injection is limited.
+    store = cfg.get("memory.summary_store")
+    if store:
+        session.summaries = session.summaries[-int(store):]
     session.stats["_summarized_turns"] = len(evicted)
     return True
 
 
 def update_relations(session: Session, cfg: Config, window_turns: int, llm) -> None:
-    slots = int(cfg.get("memory.relation_slots", 5))
+    slots = int(cfg.get("memory.relation_slots", 5))   # asked of the model, not a store cap
     recent = live_turns(session, window_turns)
     if not recent:
         return
@@ -139,7 +154,8 @@ def update_relations(session: Session, cfg: Config, window_turns: int, llm) -> N
         temperature=0.2,
     ).strip()
     lines = [ln.strip("-• \t") for ln in text.splitlines() if ln.strip()]
-    session.relations = lines[:slots]
+    store = cfg.get("memory.relation_store")
+    session.relations = lines[:int(store)] if store else lines
 
 
 GOAL_SYSTEM = (
@@ -174,6 +190,54 @@ def update_goal(session: Session, cfg: Config, window_turns: int, llm) -> bool:
         return False
     session.goal = goal
     return True
+
+
+def _longterm_done(session: Session) -> int:
+    return int(session.stats.get("_longterm_turns", 0))
+
+
+def update_longterm(session: Session, cfg: Config, window_turns: int, llm) -> int:
+    """Summarise newly evicted turns into `⌛<turn> <events>` entries.
+
+    Crack keeps long-term memory as turn-numbered event summaries, not as the
+    turns themselves. Injecting whole past replies instead — which is what this
+    did before — spends the context budget of three full answers to deliver one
+    remembered fact, and matches on the wrong text besides.
+
+    Returns how many entries were added.
+    """
+    evicted = evicted_turns(session, window_turns)
+    pending = evicted[_longterm_done(session):]
+    if not pending:
+        return 0
+
+    every = max(1, int(cfg.get("memory.longterm_every_turns", 2)))
+    max_chars = int(cfg.get("memory.longterm_max_chars", 300))
+    added = 0
+    for i in range(0, len(pending), every):
+        chunk = pending[i:i + every]
+        text = llm.complete(
+            system=LONGTERM_SYSTEM.format(max_chars=max_chars),
+            messages=[{"role": "user", "content": _render(chunk)}],
+            max_tokens=512,
+            temperature=0.2,
+        ).strip()
+        summary = truncate_to_sentence(text, max_chars)
+        if not summary:
+            continue
+        session.longterm.append({"turn": chunk[-1].index, "text": summary})
+        added += 1
+
+    store = cfg.get("memory.longterm_store")
+    if store:
+        session.longterm = session.longterm[-int(store):]
+    session.stats["_longterm_turns"] = len(evicted)
+    return added
+
+
+def render_longterm(item: dict) -> str:
+    """`⌛85 서리화가 …` — the observed on-the-wire shape."""
+    return f"⌛{item.get('turn', '?')} {item.get('text', '').strip()}".strip()
 
 
 def force_refresh(session: Session, cfg: Config, window_turns: int, llm) -> dict:
@@ -211,6 +275,8 @@ def snapshot(project_root: str, session: Session, cfg: Config, window_turns: int
         "summaries": list(session.summaries),
         "relations": list(session.relations),
         "recalled_manual": list(session.recalled),
+        "longterm_stored": len(session.longterm),
+        "longterm": [render_longterm(x) for x in session.longterm[-8:]],
         "recalled_resolved": resolved,
         "recalled_selection": mode,
         "goal": session.goal,
@@ -263,25 +329,31 @@ def _cap(items: list[str], cfg: Config) -> list[str]:
 
 def select_recalled(session: Session, cfg: Config, window_turns: int,
                     query: str) -> list[str]:
-    """Fill the `<recalled_history>` slots from turns outside the live window."""
+    """Fill `<recalled_history>` from stored long-term entries.
+
+    Manual entries the user wrote take precedence; otherwise the pool is the
+    turn-numbered summaries, newest last. A session recorded before long-term
+    summaries existed has none, so it falls back to the evicted turns it does
+    have rather than returning nothing.
+    """
     slots = int(cfg.get("memory.recalled_slots", 3))
     mode = cfg.get("memory.recalled_selection", "recent")
-    if slots <= 0 or mode == "manual":
+    if slots <= 0:
+        return []
+    if mode == "manual":
         return _cap(session.recalled[:slots], cfg)
 
-    pool = evicted_turns(session, window_turns)
+    pool = [render_longterm(x) for x in session.longterm]
     if not pool:
-        return []
+        evicted = evicted_turns(session, window_turns)
+        if not evicted:
+            return []
+        granularity = cfg.get("memory.recalled_granularity", "turn")
+        pool = _fragments(evicted) if granularity == "sentence" else [
+            f"[{t.role}] {_strip_hud(t.content)}" for t in evicted
+        ]
 
     if mode == "lexical":
-        granularity = cfg.get("memory.recalled_granularity", "turn")
-        docs = _fragments(pool) if granularity == "sentence" else [
-            f"[{t.role}] {_strip_hud(t.content)}" for t in pool
-        ]
-        if not docs:
-            return []
-        hits = BM25(docs).search(query, top_k=slots)
-        return _cap([docs[i] for i, _ in hits], cfg)
-
-    rendered = [f"[{t.role}] {_strip_hud(t.content)}" for t in pool]
-    return _cap(rendered[-slots:], cfg)
+        hits = BM25(pool).search(query, top_k=slots)
+        return _cap([pool[i] for i, _ in hits], cfg)
+    return _cap(pool[-slots:], cfg)

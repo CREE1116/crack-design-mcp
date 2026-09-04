@@ -5,6 +5,8 @@
 #                글쓴이 본인 주석: "제미나이 2.5는 환각을 잘 지어냄. 3.1로 교차검증 2회 반복.
 #                절대라는 건 없으니 순서만큼은 너무 맹신하지 마셈."
 #                → 1차 실측 아님. 반증 나오면 즉시 교체할 것.
+#   [USER-OBSERVED] 이 도구 사용자가 실제 크랙 플레이에서 직접 관찰해 보고한 내용.
+#                제3자 역공학보다 신뢰도 높음.
 #   [UNVERIFIED] 출처에 서술 없음. 합리적 추정값. 실측 후 교체 대상.
 #   [EXTENSION]  크랙에 존재 여부 불명. 에뮬레이터 자체 확장. fidelity=crack 에서는 비활성.
 
@@ -42,12 +44,24 @@ assembly:
 
 # ── 메모리 ────────────────────────────────────────────────────────
 memory:
-  summary_slots: 4           # [OBSERVED] "[최근 사건 타임라인]" 아래 요약메모리 4개
+  # [USER-OBSERVED] 요약메모리·관계도·장기기억 모두 저장 칸 수에 제한이 없다.
+  # 역공학 글이 센 "4개 / 3개 / 5개"는 그 시점 프롬프트에 실려 있던 개수였을 뿐
+  # 저장 상한이 아니었다. 그래서 저장(store)과 주입(inject)을 분리한다.
+  #   *_store   : 세션에 보관할 최대 개수. null = 무제한 (관찰된 동작)
+  #   *_slots   : 한 턴 프롬프트에 실을 개수. 문맥 예산 문제라 유한하게 둔다.
+  summary_store: null
+  relation_store: null
+  longterm_store: null
+  summary_slots: 4           # [OBSERVED] 관찰 시점 "[최근 사건 타임라인]" 에 4개가 실려 있었음
   recalled_slots: 3          # [OBSERVED] "장기 메모리는 기준은 모르겠지만 딱 3개만 들어감"
   relation_slots: 5          # [OBSERVED] "[캐릭터 관계도]" 5개
   # [UNVERIFIED] 크랙의 장기기억 선정 기준 불명(출처도 "기준은 모르겠지만"이라 명시).
   # 크랙은 벡터 검색이 아니라 텍스트 기반으로 보이므로 임베딩 경로는 구현하지 않는다.
-  # 기본값 recent = 밀려난 턴 중 최근 3개. 없는 점수 로직을 지어내지 않기 위한 선택.
+  # [USER-OBSERVED] 장기기억은 턴 원문이 아니라 턴번호를 단 사건 요약으로 저장된다:
+  #   "⌛85 서리화가 부끄러움을 견디지 못하고 키스를 실수라고 둘러대며 사무실에서 도망침. …"
+  # 요약메모리도 장면 제목과 시각·장소 머리글을 갖는다:
+  #   "관악산 전투 / 2027년 11월 25일｜10:58｜관악산 C급 게이트 외부 / <사건 요약>"
+  # 기본값 recent = 밀려난 턴 중 최근 N개. 없는 점수 로직을 지어내지 않기 위한 선택.
   recalled_selection: recent   # recent | lexical | manual
                                #   recent  : 밀려난 턴 최근 N개 (기본)
                                #   lexical : 어휘 매칭(BM25, 문자 n-gram). 벡터 아님
@@ -65,6 +79,8 @@ memory:
   #   manual : 세션에 기입된 값만 사용
   goal_source: auto          # auto | manual
   goal_max_chars: 120
+  longterm_every_turns: 2    # [UNVERIFIED] 장기기억 항목 하나가 담는 턴 수
+  longterm_max_chars: 300    # [UNVERIFIED]
   summarize_every_turns: 8   # [UNVERIFIED] 요약 갱신 주기
   summary_max_chars: 300     # [UNVERIFIED]
 

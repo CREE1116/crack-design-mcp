@@ -141,6 +141,11 @@ class Session:
     summaries: list[str] = field(default_factory=list)
     relations: list[str] = field(default_factory=list)
     recalled: list[str] = field(default_factory=list)
+    # 장기기억: turn-numbered event summaries, e.g.
+    #   {"turn": 85, "text": "서리화가 … 도망침. 크리가 … 수락함."}
+    # Crack stores these as summaries rather than raw turn text, and does not
+    # cap how many it keeps; only how many ride in a given prompt.
+    longterm: list[dict[str, Any]] = field(default_factory=list)
     goal: str = ""
     # [주어진 목표] is a long-term-memory slot the agent maintains. A goal the
     # user set explicitly outranks that and is never overwritten.

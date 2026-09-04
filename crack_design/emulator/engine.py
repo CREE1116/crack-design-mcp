@@ -148,6 +148,7 @@ class Engine:
                 memory.update_summaries(session, self.cfg, window, self.client)
                 memory.update_relations(session, self.cfg, window, self.client)
                 memory.update_goal(session, self.cfg, window, self.client)
+                memory.update_longterm(session, self.cfg, window, self.client)
             except Exception:
                 pass
 
