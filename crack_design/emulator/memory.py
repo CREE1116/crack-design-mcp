@@ -33,12 +33,15 @@ NOTHING = "없음"
 
 LONGTERM_SYSTEM = (
     "너는 롤플레이 세션의 장기기억 담당이다. 주어진 대화 조각에 아래 기준을 만족하는 "
-    "사건이 있으면 한 문단으로 요약하고, 없으면 정확히 '{nothing}' 한 단어만 출력한다.\n"
+    "사건이 있으면 아래 형식으로 기록하고, 없으면 정확히 '{nothing}' 한 단어만 출력한다.\n"
+    "형식(2줄):\n"
+    "1줄: ### 장면 제목\n"
+    "2줄: 날짜｜시각｜장소 뒤에 이어서 사건 요약 (날짜·시각·장소가 대화에 없으면 생략)\n"
     "기록할 것:\n{criteria}\n"
     "기록하지 않을 것: {exclude}\n"
     "요약 규칙: 인물명을 주어로 쓴다. 누가·무엇을·그 결과를 사실 위주로 쓴다. "
     "감정 묘사와 대사는 버린다. 추측 금지. 최대 {max_chars}자. "
-    "다른 말 붙이지 말고 요약문 또는 '{nothing}' 만 출력."
+    "다른 말 붙이지 말고 형식대로 또는 '{nothing}' 만 출력."
 )
 
 
@@ -249,7 +252,7 @@ def update_longterm(session: Session, cfg: Config, window_turns: int, llm) -> in
         summary = truncate_to_sentence(text, max_chars)
         if not summary or summary == NOTHING:
             continue
-        session.longterm.append({"turn": chunk[-1].index, "text": summary})
+        session.longterm.append(_parse_longterm(summary, chunk[-1].index))
         added += 1
 
     store = cfg.get("memory.longterm_store")
@@ -259,9 +262,43 @@ def update_longterm(session: Session, cfg: Config, window_turns: int, llm) -> in
     return added
 
 
+def _parse_longterm(summary: str, turn: int) -> dict:
+    """Split `### 제목 / 날짜｜시각｜장소 사건` back into its parts."""
+    lines = [ln.strip() for ln in summary.splitlines() if ln.strip()]
+    title, body = "", summary.strip()
+    if lines and lines[0].startswith("#"):
+        title = lines[0].lstrip("# ").strip()
+        body = " ".join(lines[1:]).strip()
+    header = ""
+    if "｜" in body:
+        head, _, rest = body.partition("｜")
+        # The header runs to the last pipe-joined field before the prose.
+        parts = body.split("｜")
+        if len(parts) >= 2:
+            tail = parts[-1].split(" ", 1)
+            header = "｜".join(parts[:-1] + [tail[0]])
+            body = tail[1].strip() if len(tail) > 1 else ""
+    return {"turn": turn, "title": title, "header": header, "text": body}
+
+
 def render_longterm(item: dict) -> str:
-    """`⌛85 서리화가 …` — the observed on-the-wire shape."""
-    return f"⌛{item.get('turn', '?')} {item.get('text', '').strip()}".strip()
+    """The observed `<recalled_history>` entry shape.
+
+        ### 병원에서의 눈
+        2027년 11월 28일｜08:15｜헌터협회 지정병원 특실 크리가 의식을 회복하고 …
+
+    A titled scene block with a date｜time｜place header, not a turn-numbered
+    line. A separately reported `⌛85 …` shape did not appear in the verbatim
+    dump; where an entry carries no title or header this still falls back to
+    the turn number so nothing is lost.
+    """
+    title = (item.get("title") or "").strip()
+    header = (item.get("header") or "").strip()
+    text = (item.get("text") or "").strip()
+    if not title and not header:
+        return f"⌛{item.get('turn', '?')} {text}".strip()
+    lines = [f"### {title}" if title else "", f"{header} {text}".strip()]
+    return "\n".join(x for x in lines if x)
 
 
 def force_refresh(session: Session, cfg: Config, window_turns: int, llm) -> dict:

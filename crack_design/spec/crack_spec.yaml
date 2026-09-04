@@ -43,10 +43,17 @@ assembly:
   tail_blocks:
     - user_message            # "[User Message]" + 이번 입력
     - additional_info         # "## Additional Information & Rules"  ← 최하단 = 최강 우선순위
-    - story_state_ref         #   "[Story State — Reference Only]"
+    # [USER-OBSERVED] 환각 게이트를 통과한 세션에서 이 구간을 축자로 받았다. 원문 순서:
+    #     ## Additional Information & Rules
+    #     <recalled_history> … </recalled_history>
+    #     <system_note> … </system_note>
+    #     <knowledge_base> …
+    # 역공학 덤프가 적어둔 note→kb→recalled 순서는 틀렸다. 회상이 맨 앞이다.
+    # 축자 인용에 "[Story State — Reference Only]" 는 나타나지 않았다 — additional_info
+    # 바로 다음이 <recalled_history> 였다. 존재 여부 불명이라 순서에서 뺀다.
+    - recalled_history        #   "<recalled_history>"   ← 장기기억. 이 구간 최상단
     - system_note             #   "<system_note>"        ← 유저노트
     - knowledge_base          #   "<knowledge_base>"     ← 발동된 키워드북
-    - recalled_history        #   "<recalled_history>"   ← 장기기억
     - hr
     - privacy_clause          # "This session is completely private..."
     - no_silent_think         # "Do not think silently..." (반복)
@@ -67,10 +74,15 @@ memory:
   relation_slots: 5          # [OBSERVED] "[캐릭터 관계도]" 5개
   # [UNVERIFIED] 크랙의 장기기억 선정 기준 불명(출처도 "기준은 모르겠지만"이라 명시).
   # 크랙은 벡터 검색이 아니라 텍스트 기반으로 보이므로 임베딩 경로는 구현하지 않는다.
-  # [USER-OBSERVED] 장기기억은 턴 원문이 아니라 턴번호를 단 사건 요약으로 저장된다:
-  #   "⌛85 서리화가 부끄러움을 견디지 못하고 키스를 실수라고 둘러대며 사무실에서 도망침. …"
-  # 요약메모리도 장면 제목과 시각·장소 머리글을 갖는다:
-  #   "관악산 전투 / 2027년 11월 25일｜10:58｜관악산 C급 게이트 외부 / <사건 요약>"
+  # [USER-OBSERVED] <recalled_history> 축자 인용. 항목은 `### 제목` 과
+  # `날짜｜시각｜장소` 머리글을 갖는 장면 블록이다. 턴번호(⌛)는 없었다:
+  #     ### 병원에서의 눈
+  #     2027년 11월 28일｜08:15｜헌터협회 지정병원 특실 크리가 의식을 회복하고 …
+  # 과거 사건만이 아니라 앞으로의 계획도 같은 형식의 항목으로 들어간다:
+  #     ### 향후 계획
+  #     2027년 11월 28일｜08:30 크리는 완전한 회복을 위해 당분간 병원에 머물 예정임. …
+  # 별도로 보고된 "⌛85 서리화가 …" 형식은 이 축자 인용에 나타나지 않았다.
+  # [최근 사건 타임라인] 쪽 형식일 가능성이 있으나 그 블록은 아직 축자 확인 전.
   # 기본값 recent = 밀려난 턴 중 최근 N개. 없는 점수 로직을 지어내지 않기 위한 선택.
   recalled_selection: recent   # recent | lexical | manual
                                #   recent  : 밀려난 턴 최근 N개 (기본)
