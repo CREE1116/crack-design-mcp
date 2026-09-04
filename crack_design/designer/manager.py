@@ -38,6 +38,29 @@ def format_keyword_content(content_or_bullets: str | list[str], header_tag: str 
             body = f"[{clean_tag}]\n{body}"
     return body
 
+class PathEscape(ValueError):
+    """A caller-supplied name resolved outside the project it names."""
+
+
+def contained(base: Path, name: str) -> Path:
+    """Join `name` under `base`, refusing anything that escapes it.
+
+    Artifact and project names arrive straight from a tool call, and the server
+    is meant to be reachable from outside this machine. `..` segments and
+    absolute paths therefore have to be rejected rather than normalised away:
+    without this, get_artifact reads any file the process can read and
+    save_artifact writes any file it can write.
+    """
+    candidate = Path(name)
+    if candidate.is_absolute() or candidate.drive or name.startswith("~"):
+        raise PathEscape(f"경로 '{name}' — 절대경로는 허용되지 않습니다")
+    base = base.resolve()
+    target = (base / candidate).resolve()
+    if target != base and base not in target.parents:
+        raise PathEscape(f"경로 '{name}' 이 프로젝트 밖({base})을 가리킵니다")
+    return target
+
+
 class ProjectManager:
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
@@ -575,14 +598,13 @@ class ProjectManager:
 
     def get_artifact(self, name: str) -> dict[str, Any] | None:
         clean_name = name.strip().lstrip("/")
-        if clean_name.startswith("assets/"):
-            p = self.build_dir / clean_name
-        elif (self.build_dir / clean_name).exists():
-            p = self.build_dir / clean_name
-        elif (self.build_dir / "assets" / clean_name).exists():
-            p = self.build_dir / "assets" / clean_name
-        elif (self.root / clean_name).exists():
-            p = self.root / clean_name
+        for base, rel in ((self.build_dir, clean_name),
+                          (self.build_dir, f"assets/{clean_name}"),
+                          (self.root, clean_name)):
+            cand = contained(base, rel)
+            if cand.is_file():
+                p = cand
+                break
         else:
             return None
         content = p.read_text(encoding="utf-8")
@@ -597,13 +619,13 @@ class ProjectManager:
     def save_artifact(self, name: str, content: str) -> dict[str, Any]:
         clean_name = name.strip().lstrip("/")
         if clean_name.startswith("assets/"):
-            p = self.build_dir / clean_name
+            p = contained(self.build_dir, clean_name)
         elif clean_name in ("story-description.md", "summary-comment.md", "image-prompts.md", "prompts.json"):
-            p = self.build_dir / "assets" / clean_name
+            p = contained(self.build_dir, f"assets/{clean_name}")
         elif clean_name in ("story.md", "characters.md"):
-            p = self.root / clean_name
+            p = contained(self.root, clean_name)
         else:
-            p = self.build_dir / clean_name
+            p = contained(self.build_dir, clean_name)
 
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content.strip() + "\n", encoding="utf-8")
@@ -617,12 +639,12 @@ class ProjectManager:
 
     def delete_artifact(self, name: str) -> dict[str, Any]:
         clean_name = name.strip().lstrip("/")
-        if clean_name.startswith("assets/"):
-            p = self.build_dir / clean_name
-        elif (self.build_dir / clean_name).exists():
-            p = self.build_dir / clean_name
-        elif (self.build_dir / "assets" / clean_name).exists():
-            p = self.build_dir / "assets" / clean_name
+        for base, rel in ((self.build_dir, clean_name),
+                          (self.build_dir, f"assets/{clean_name}")):
+            cand = contained(base, rel)
+            if cand.is_file():
+                p = cand
+                break
         else:
             return {"success": False, "message": f"산출물 '{name}'을 찾을 수 없습니다."}
         p.unlink()

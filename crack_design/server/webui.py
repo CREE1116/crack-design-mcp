@@ -24,6 +24,7 @@ from ..emulator.models import Session, Turn
 from ..emulator.parser import lint, load_project
 from ..emulator.session import Store
 from ..config import workspace_root, exports_dir
+from ..designer.manager import contained
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -304,7 +305,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not p_name:
                     return self._json({"error": "project name required"}, 400)
                 base = workspace_root()
-                candidates = [base / p_name, base / Path(p_name).name]
+                candidates = [contained(base, p_name), contained(base, Path(p_name).name)]
                 target = next((c for c in candidates if c.is_dir()), None)
                 if not target:
                     return self._json({"error": f"project '{p_name}' not found"}, 404)

@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
 from .mcp_server import Server
 from .webui import Handler, State
+
+
+SSE_KEEPALIVE_SECONDS = 15
 
 
 class MCPHTTPHandler(Handler):
@@ -59,6 +63,28 @@ class MCPHTTPHandler(Handler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _open_sse_stream(self) -> None:
+        """Hold a server-to-client SSE stream open until the client leaves."""
+        self.send_response(200)
+        self._headers("text/event-stream; charset=utf-8")
+        session_id = self.headers.get("MCP-Session-Id")
+        if session_id:
+            self.send_header("MCP-Session-Id", session_id)
+        # A stream has no length and must not be reused for a later request.
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self.wfile.write(b": stream open\n\n")
+            self.wfile.flush()
+            while not self.app.stopping.is_set():
+                if self.app.stopping.wait(SSE_KEEPALIVE_SECONDS):
+                    break
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass            # client went away; nothing to clean up
+
     def _error(self, status: int, message: str) -> None:
         self._json({"error": message}, status=status)
 
@@ -75,7 +101,17 @@ class MCPHTTPHandler(Handler):
                         "mcp_endpoint": self.app.endpoint})
             return
         if path == self.app.endpoint:
-            self._error(405, "MCP endpoint accepts POST requests")
+            # Streamable HTTP lets a client open the server-to-client stream
+            # with a GET. Answering 405 is legal for a server that has nothing
+            # to push, but several clients treat the refusal as a failed
+            # connection and never get as far as POSTing, so the stream is
+            # opened and held. Nothing is pushed over it today; the comment
+            # frames just keep it from idling shut.
+            if "text/event-stream" in self.headers.get("Accept", ""):
+                self._open_sse_stream()
+                return
+            self._error(405, "MCP endpoint accepts POST requests "
+                             "(GET is for the SSE stream: Accept: text/event-stream)")
             return
         super().do_GET()
 
@@ -128,6 +164,9 @@ class MCPHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+    # Held SSE streams block shutdown unless they are told to let go.
+    stopping: threading.Event
+
     def __init__(self, address: tuple[str, int], mcp: Server, endpoint: str,
                  auth_token: str | None, cors_origin: str):
         super().__init__(address, MCPHTTPHandler)
@@ -135,6 +174,11 @@ class MCPHTTPServer(ThreadingHTTPServer):
         self.endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
         self.auth_token = auth_token
         self.cors_origin = cors_origin
+        self.stopping = threading.Event()
+
+    def server_close(self):
+        self.stopping.set()
+        super().server_close()
 
 
 def main(project: str, store: str | None = None, spec: str | None = None,

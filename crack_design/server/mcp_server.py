@@ -36,6 +36,7 @@ from ..designer.guides import get_guide
 from ..audit.full_audit import audit_project as run_audit_project
 from ..audit.length import count_chars
 from ..config import workspace_root, exports_dir, state_root
+from ..designer.manager import contained
 
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -347,7 +348,7 @@ class Server:
         if not p_name:
             raise ValueError("project_name or title is required")
         clean_name = re.sub(r'[\\/:*?"<>|]', "_", p_name.strip())
-        target_dir = workspace_root() / clean_name
+        target_dir = contained(workspace_root(), clean_name)
 
         title = a.get("title", clean_name)
         premise = a.get("premise", "")
@@ -424,7 +425,7 @@ class Server:
         target = Path(p_name)
         if not target.is_absolute():
             base = workspace_root()
-            candidates = [base / p_name, base / target.name]
+            candidates = [contained(base, p_name), contained(base, Path(p_name).name)]
             found = next((c for c in candidates if c.is_dir()), None)
             if not found:
                 raise ValueError(f"project '{p_name}' not found in {workspace_root()}")
@@ -449,7 +450,7 @@ class Server:
         if not confirm:
             return {"success": False, "message": f"프로젝트 '{p_name}'를 삭제하려면 confirm=True 파라미터를 함께 전달하세요."}
 
-        target = workspace_root() / p_name
+        target = contained(workspace_root(), p_name)
         if not target.is_dir():
             raise ValueError(f"project '{p_name}' not found")
 
@@ -492,7 +493,7 @@ class Server:
         if p_name:
             target = Path(p_name)
             if not target.is_absolute():
-                target = workspace_root() / p_name
+                target = contained(workspace_root(), p_name)
         else:
             p = Path(self.project_root)
             target = p.parent if p.name == "build" else p
@@ -505,7 +506,7 @@ class Server:
         db = self._db()
         proj = db.get_project(p_name)
         if not proj:
-            target = workspace_root() / p_name
+            target = contained(workspace_root(), p_name)
             if target.is_dir():
                 db.import_from_markdown(target)
                 proj = db.get_project(p_name)
@@ -523,7 +524,7 @@ class Server:
         db = self._db()
         proj = db.get_project(p_name)
         if not proj:
-            target = workspace_root() / p_name
+            target = contained(workspace_root(), p_name)
             if target.is_dir():
                 db.import_from_markdown(target)
                 proj = db.get_project(p_name)
