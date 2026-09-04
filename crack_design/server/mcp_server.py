@@ -889,6 +889,24 @@ class Server:
             "order": entry.order,
         }
 
+    def _kb_targets(self, variant: str) -> list[Path]:
+        """Keyword-book files a variant refers to.
+
+        SAFE and UNSAFE are separate books on purpose: adult material lives in
+        one and not the other. A tool that ignores the variant and globs
+        keyword-book*.md will carry an entry across that line.
+        """
+        root = Path(self.project_root)
+        variant = (variant or "both").strip().lower()
+        names = {"safe": ["keyword-book-safe.md"],
+                 "unsafe": ["keyword-book-unsafe.md"],
+                 "default": ["keyword-book.md"],
+                 "both": ["keyword-book-safe.md", "keyword-book-unsafe.md",
+                          "keyword-book.md"]}.get(variant)
+        if names is None:
+            raise ValueError(f"variant '{variant}' 는 safe, unsafe, default, both 중 하나여야 합니다")
+        return [root / n for n in names]
+
     def tool_update_keyword_entry(self, a: dict) -> dict:
         title = a.get("title")
         keywords = a.get("keywords")
@@ -905,22 +923,20 @@ class Server:
         new_title = a.get("new_title")
         root = Path(self.project_root)
 
-        targets = []
-        if variant in ("safe", "both"):
-            p = root / "keyword-book-safe.md"
-            if p.exists():
-                targets.append(p)
-        if variant in ("unsafe", "both"):
-            p = root / "keyword-book-unsafe.md"
-            if p.exists():
-                targets.append(p)
-        kb_default = root / "keyword-book.md"
-        if kb_default.exists() and kb_default not in targets:
-            targets.append(kb_default)
+        targets = [p for p in self._kb_targets(variant) if p.exists()]
         if not targets:
-            targets.append(kb_default)
+            targets = [root / "keyword-book.md"]
 
         from ..emulator.parser import update_keyword_book_entry, read_keyword_book_entry
+
+        # Editing with variant "both" must not create the entry in a book that
+        # never had it — that is how adult material ends up in SAFE. A new
+        # entry has to name the variant it belongs to.
+        if variant == "both":
+            present = [p for p in targets
+                       if read_keyword_book_entry(p.read_text(encoding="utf-8"), title) is not None]
+            if present:
+                targets = present
 
         # SAFE and UNSAFE routinely carry different prose for the same entry,
         # and keyword-book.md is written no matter which variant was asked for.
@@ -1194,20 +1210,9 @@ class Server:
             raise ValueError("entries must be a non-empty list of keyword entry dicts")
 
         root = Path(self.project_root)
-        targets = []
-        if variant in ("safe", "both"):
-            p = root / "keyword-book-safe.md"
-            if p.exists():
-                targets.append(p)
-        if variant in ("unsafe", "both"):
-            p = root / "keyword-book-unsafe.md"
-            if p.exists():
-                targets.append(p)
-        kb_default = root / "keyword-book.md"
-        if kb_default.exists() and kb_default not in targets:
-            targets.append(kb_default)
+        targets = [p for p in self._kb_targets(variant) if p.exists()]
         if not targets:
-            targets.append(kb_default)
+            targets = [root / "keyword-book.md"]
 
         total_processed = 0
         created_count = 0
@@ -1268,7 +1273,9 @@ class Server:
         root = Path(self.project_root)
 
         from ..emulator.parser import delete_keyword_book_entry
-        targets = list(root.glob("keyword-book*.md"))
+        # The variant was accepted in the schema and then ignored: every book
+        # got globbed, so deleting from SAFE also deleted from UNSAFE.
+        targets = [p for p in self._kb_targets(a.get("variant") or "both") if p.exists()]
         if not targets:
             targets = [root / "keyword-book.md"]
 
