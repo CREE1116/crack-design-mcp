@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crack-design-mcp"
+version = "0.1.0"
+description = "All-in-one Crack story-chat design assistant, MCP server, and emulator"
+readme = "README.md"
+authors = [{ name = "Crack Dev Team" }]
+requires-python = ">=3.9"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+crack-design = "crack_design.cli:main"

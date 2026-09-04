@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.crack-emu/
+*.db
+.DS_Store
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
