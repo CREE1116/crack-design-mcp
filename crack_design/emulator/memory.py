@@ -27,12 +27,28 @@ SUMMARY_SYSTEM = (
 )
 
 # Observed shape of a long-term entry: the turn number, then what happened.
+# Entries are sparse — a real session put them 22 and 7 turns apart — so the
+# judgement of whether anything happened at all is part of the job.
+NOTHING = "없음"
+
 LONGTERM_SYSTEM = (
-    "너는 롤플레이 세션의 장기기억 담당이다. 주어진 대화 조각에서 나중에 다시 참조될 만한 "
-    "사건만 한국어 한 문단으로 요약한다.\n"
-    "규칙: 인물명을 주어로 쓴다. 사건·결정·약속·관계 변화만 남긴다. 묘사와 대사는 버린다. "
-    "추측 금지. 최대 {max_chars}자. 다른 말 붙이지 말고 요약문만 출력."
+    "너는 롤플레이 세션의 장기기억 담당이다. 주어진 대화 조각에 아래 기준을 만족하는 "
+    "사건이 있으면 한 문단으로 요약하고, 없으면 정확히 '{nothing}' 한 단어만 출력한다.\n"
+    "기록할 것:\n{criteria}\n"
+    "기록하지 않을 것: {exclude}\n"
+    "요약 규칙: 인물명을 주어로 쓴다. 누가·무엇을·그 결과를 사실 위주로 쓴다. "
+    "감정 묘사와 대사는 버린다. 추측 금지. 최대 {max_chars}자. "
+    "다른 말 붙이지 말고 요약문 또는 '{nothing}' 만 출력."
 )
+
+
+def _longterm_prompt(cfg: Config, max_chars: int) -> str:
+    criteria = cfg.get("memory.longterm_criteria") or []
+    exclude = cfg.get("memory.longterm_exclude") or "일상적인 대화"
+    return LONGTERM_SYSTEM.format(
+        nothing=NOTHING, max_chars=max_chars, exclude=exclude,
+        criteria="\n".join(f"- {c}" for c in criteria) or "- 나중에 다시 참조될 사건",
+    )
 
 RELATION_SYSTEM = (
     "너는 롤플레이 세션의 관계 기록 담당이다. 대화에서 등장인물과 플레이어의 관계 상태를 "
@@ -211,19 +227,27 @@ def update_longterm(session: Session, cfg: Config, window_turns: int, llm) -> in
     if not pending:
         return 0
 
-    every = max(1, int(cfg.get("memory.longterm_every_turns", 2)))
-    max_chars = int(cfg.get("memory.longterm_max_chars", 300))
+    max_chars = int(cfg.get("memory.longterm_max_chars", 200))
+    mode = cfg.get("memory.longterm_selection", "event")
+    # In event mode the whole pending stretch is judged at once, so one
+    # significant thing produces one entry however many turns it spanned.
+    every = (max(1, int(cfg.get("memory.longterm_every_turns", 2)))
+             if mode == "cadence" else len(pending))
+    system = _longterm_prompt(cfg, max_chars)
+
     added = 0
     for i in range(0, len(pending), every):
         chunk = pending[i:i + every]
         text = llm.complete(
-            system=LONGTERM_SYSTEM.format(max_chars=max_chars),
+            system=system,
             messages=[{"role": "user", "content": _render(chunk)}],
             max_tokens=512,
             temperature=0.2,
         ).strip()
+        if mode == "event" and (not text or text.strip().strip(".'\"") == NOTHING):
+            continue                    # nothing here worth remembering
         summary = truncate_to_sentence(text, max_chars)
-        if not summary:
+        if not summary or summary == NOTHING:
             continue
         session.longterm.append({"turn": chunk[-1].index, "text": summary})
         added += 1

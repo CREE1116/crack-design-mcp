@@ -7,6 +7,10 @@
 #                → 1차 실측 아님. 반증 나오면 즉시 교체할 것.
 #   [USER-OBSERVED] 이 도구 사용자가 실제 크랙 플레이에서 직접 관찰해 보고한 내용.
 #                제3자 역공학보다 신뢰도 높음.
+#   [MODEL-SELF-REPORT] 크랙에서 돌던 모델이 /OOC 로 자기 기억 동작을 설명한 내용.
+#                모델은 자기 프롬프트를 정확히 인용하지 못하고 그럴듯하게 지어내는 경향이
+#                있으므로([MODEL-SELF-REPORT] 원문도 "재구성한다면" 이라고 스스로 밝힘)
+#                [USER-OBSERVED] 보다 아래 등급. 관찰과 어긋나면 관찰을 따른다.
 #   [UNVERIFIED] 출처에 서술 없음. 합리적 추정값. 실측 후 교체 대상.
 #   [EXTENSION]  크랙에 존재 여부 불명. 에뮬레이터 자체 확장. fidelity=crack 에서는 비활성.
 
@@ -79,8 +83,22 @@ memory:
   #   manual : 세션에 기입된 값만 사용
   goal_source: auto          # auto | manual
   goal_max_chars: 120
-  longterm_every_turns: 2    # [UNVERIFIED] 장기기억 항목 하나가 담는 턴 수
-  longterm_max_chars: 300    # [UNVERIFIED]
+  # [USER-OBSERVED] 실제 세션의 장기기억 턴번호가 ⌛85 → ⌛107 → ⌛114 로 간격 22, 7.
+  # 주기적 생성이 아니다. 2턴마다 하나씩 만들면 258턴 세션에서 129개가 나오는데
+  # 관찰된 것은 그보다 훨씬 드물다. 그래서 기본은 사건 기반 선별.
+  #   event   : 아래 기준을 만족하는 사건이 있을 때만 기록 (기본)
+  #   cadence : longterm_every_turns 턴마다 무조건 하나
+  longterm_selection: event  # event | cadence
+  longterm_every_turns: 2    # cadence 모드에서만 사용
+  # [MODEL-SELF-REPORT] 모델이 밝힌 기록 기준. 원문은 인용이 아니라 재구성이지만,
+  # 위의 턴번호 간격이 "드물게, 중대한 것만" 이라는 방향과 일치해 채택한다.
+  longterm_criteria:
+    - "관계의 질적 변화 — 호감도 증감이 아니라 관계의 정의가 바뀌는 사건(동료→연인, 가면이 벗겨지는 전환점)"
+    - "서사의 중대 분기점 — 이 사건 전후로 이야기가 명확히 갈리는 것(등급 영구 변동, 세계관 비밀 공개)"
+    - "새로운 핵심 요소 도입 — 앞으로 계속 쓰일 능력·아이템·인물·설정의 첫 등장"
+  longterm_exclude: "단순한 칭찬·선물·가벼운 데이트·일상 대화, 일상적 임무 수행, 소모품 획득"
+  # [MODEL-SELF-REPORT] "50자 내외, 감정 묘사 배제, 사실 위주"
+  longterm_max_chars: 200
   summarize_every_turns: 8   # [UNVERIFIED] 요약 갱신 주기
   summary_max_chars: 300     # [UNVERIFIED]
 
