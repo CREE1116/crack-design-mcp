@@ -259,6 +259,56 @@ class AgentClient(Client):
                 "model_available": True}
 
 
+def list_free_models(cfg: Config, api_key: str | None = None,
+                    timeout: int = 20) -> list[dict]:
+    """OpenRouter models that cost nothing, cheapest-looking first.
+
+    The free tier rotates: a model that worked last week returns 404 today. So
+    the list is fetched rather than pinned, and `:free` alone is not trusted —
+    the price fields are checked, since some `:free` ids carry a nonzero
+    completion price.
+    """
+    base = str((cfg.get("providers.openrouter") or {}).get(
+        "base_url", "https://openrouter.ai/api/v1")).rstrip("/")
+    req = urllib.request.Request(f"{base}/models", headers={"Accept": "application/json"})
+    key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+    if key:
+        req.add_header("Authorization", f"Bearer {key}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except Exception as exc:
+        raise LLMError(f"OpenRouter 모델 목록을 가져오지 못했습니다: {exc}") from exc
+
+    out: list[dict] = []
+    for m in data.get("data", []):
+        mid = m.get("id") or ""
+        pricing = m.get("pricing") or {}
+        def _num(x):
+            try: return float(x)
+            except (TypeError, ValueError): return 1.0
+        if _num(pricing.get("prompt")) > 0 or _num(pricing.get("completion")) > 0:
+            continue
+        ctx = m.get("context_length") or 0
+        out.append({"id": mid, "name": m.get("name") or mid,
+                    "context_length": ctx,
+                    "free_suffix": mid.endswith(":free")})
+    # `openrouter/auto*` prices as zero but is a router that picks a paid model
+    # behind the scenes, so an explicitly free id comes first. A 7,000-character
+    # prompt plus history needs room, so longest context wins after that.
+    out.sort(key=lambda x: (not x["free_suffix"], -int(x["context_length"] or 0)))
+    return out
+
+
+def pick_free_model(cfg: Config, api_key: str | None = None,
+                    min_context: int = 16000) -> dict | None:
+    """The roomiest free model that can hold this harness's prompts."""
+    for m in list_free_models(cfg, api_key):
+        if m["free_suffix"] and int(m["context_length"] or 0) >= min_context:
+            return m
+    return None
+
+
 def make_client(cfg: Config, provider: str | None = None, canned: str = "",
                 api_key: str | None = None) -> Client:
     provider = provider or cfg.get("llm.provider", "ollama")

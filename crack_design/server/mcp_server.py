@@ -36,7 +36,8 @@ from ..designer.guides import get_guide
 from ..audit.full_audit import audit_project as run_audit_project
 from ..audit.length import count_chars
 from ..config import workspace_root, exports_dir, state_root
-from ..designer.manager import contained
+from ..keys import KeyStore
+from ..designer.manager import contained, PathEscape
 
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -53,13 +54,10 @@ class Server:
         self.log = ActivationLog(self.store.root.parent / "logs")
         self.cfg = Config.load(spec)
         self.project = load_project(project)
-        self.keys: dict[str, str] = {}
-        self.key_file = Path(key_file).expanduser() if key_file else None
-        if self.key_file and self.key_file.is_file():
-            try:
-                self.keys = json.loads(self.key_file.read_text(encoding="utf-8"))
-            except Exception:
-                self.keys = {}
+        # Same store the web UI writes to, so a key set in either is visible
+        # to both and survives a restart.
+        self.keys = KeyStore(key_file)
+        self.key_file = self.keys.path
 
     # ── engine ────────────────────────────────────────────────────
     def _engine(self, overrides: dict | None = None, variant: str | None = None) -> Engine:
@@ -648,7 +646,26 @@ class Server:
         res = db.create_zip_archive(proj["id"])
         fn = res["filename"]
         res["local_download_url"] = f"http://127.0.0.1:8787/api/download/{fn}"
-        res["remote_download_url"] = f"https://initiatives-rather-techno-titled.trycloudflare.com/api/download/{fn}"
+        # The remote URL used to be a hardcoded tunnel hostname, which quick
+        # tunnels reissue on every restart — it had been pointing at a dead
+        # host for a while. The caller knows the address it reached us on.
+        res["download_path"] = f"/api/download/{fn}"
+
+        # Inline the archive when asked. A download URL is useless to an agent
+        # talking to a remote instance over MCP; base64 is how a project
+        # actually crosses to another machine.
+        if a.get("as_base64"):
+            import base64
+            raw = Path(res["zip_path"]).read_bytes()
+            limit = int(a.get("max_bytes") or 8_000_000)
+            if len(raw) > limit:
+                res["zip_base64"] = None
+                res["base64_error"] = (
+                    f"ZIP 이 {len(raw)//1024}KB 로 한도 {limit//1024}KB 를 넘습니다. "
+                    f"에셋을 빼거나 download_path 로 내려받으십시오.")
+            else:
+                res["zip_base64"] = base64.b64encode(raw).decode()
+                res["base64_bytes"] = len(res["zip_base64"])
         return res
 
     def tool_sync_to_crack_draft(self, a: dict) -> dict:
@@ -972,6 +989,161 @@ class Server:
         }
 
 
+    def tool_edit_prompt_section(self, a: dict) -> dict:
+        """Replace one section of a prompt instead of resending the whole file.
+
+        update_prompt takes the entire document, so changing one line of a
+        7,000-character prompt means retyping all of it — the surest way to
+        lose something by accident. A section is addressed by its heading.
+        """
+        heading = (a.get("heading") or "").strip()
+        if not heading:
+            raise ValueError("heading is required (예: '## 이미지 출력 규칙')")
+        content = a.get("content")
+        if content is None:
+            raise ValueError("content is required")
+        target = (a.get("target") or "main").strip().lower()
+        variant = self._resolve_variant(a.get("variant")) if a.get("variant") else self.variant
+        root = Path(self.project_root)
+        path = {"main": root / f"integrated-prompt-{variant}.md",
+                "prologue": root / "prologue.md",
+                "opening_situation": root / "start-prompt.md"}.get(target)
+        if path is None:
+            raise ValueError("target must be main, prologue or opening_situation")
+        if not path.exists() and target == "main" and (root / "integrated-prompt.md").exists():
+            path = root / "integrated-prompt.md"
+        if not path.exists():
+            raise ValueError(f"{path.name} 이 없습니다")
+
+        text = path.read_text(encoding="utf-8")
+        level = len(heading) - len(heading.lstrip("#"))
+        pattern = re.compile(
+            rf"^{re.escape(heading)}[ \t]*$.*?(?=^#{{1,{max(level, 1)}}} |\Z)",
+            re.M | re.S)
+        m = pattern.search(text)
+        if not m:
+            headings = re.findall(r"^#+ .*$", text, re.M)
+            raise ValueError(f"'{heading}' 섹션을 찾지 못했습니다. 있는 헤딩: {headings}")
+
+        body = content if content.startswith("#") else f"{heading}\n{content.strip()}\n"
+        if not body.endswith("\n"):
+            body += "\n"
+        new_text = text[:m.start()] + body + text[m.end():]
+        before = count_chars(text)[0]
+        path.write_text(new_text, encoding="utf-8")
+        self.reload()
+
+        after, _cp, _u16 = count_chars(new_text)
+        limit = 7000 if target == "main" else 1000
+        return {"success": True, "target": target, "variant": variant,
+                "heading": heading, "saved_to": path.name,
+                "chars_before": before, "chars": after, "limit": limit,
+                "needs_compression": after > limit,
+                "alert": (f"⚠️ {after}자로 {limit}자 한도를 {after - limit}자 초과했습니다. "
+                          f"파일에는 저장되었으니 압축해 주세요.") if after > limit else None,
+                "replaced_chars": count_chars(m.group(0))[0]}
+
+    def tool_list_prompt_sections(self, a: dict) -> dict:
+        """Headings of a prompt with their sizes — what edit_prompt_section takes."""
+        variant = self._resolve_variant(a.get("variant")) if a.get("variant") else self.variant
+        text = self.project.prompt(variant)
+        heads = [(m.start(), m.group(0)) for m in re.finditer(r"^#+ .*$", text, re.M)]
+        out = []
+        for i, (pos, h) in enumerate(heads):
+            end = heads[i + 1][0] if i + 1 < len(heads) else len(text)
+            out.append({"heading": h.strip(), "chars": count_chars(text[pos:end])[0]})
+        return {"variant": variant, "total_chars": count_chars(text)[0],
+                "limit": 7000, "sections": out}
+
+    def tool_list_free_models(self, a: dict) -> dict:
+        """OpenRouter models that cost nothing right now."""
+        from ..emulator.llm import list_free_models, pick_free_model
+        key = self.keys.get("openrouter")
+        models = list_free_models(self.cfg, key)
+        best = pick_free_model(self.cfg, key)
+        return {"count": len(models), "models": models[:int(a.get("limit") or 20)],
+                "recommended": best,
+                "note": "무료 티어는 수시로 바뀝니다. 고정하지 말고 필요할 때 다시 조회하세요."}
+
+    def tool_set_api_key(self, a: dict) -> dict:
+        """Store a provider key for this server (file mode 600, never echoed)."""
+        provider = (a.get("provider") or "").strip().lower()
+        if not provider:
+            raise ValueError("provider is required (gemini, openrouter, openai 등)")
+        key = (a.get("key") or "").strip()
+        self.keys.set(provider, key)
+        return {"provider": provider, "stored": bool(key),
+                "providers_with_keys": sorted(self.keys.keys),
+                "path": str(self.keys.path) if self.keys.path else None}
+
+    def tool_import_project_zip(self, a: dict) -> dict:
+        """Unpack a base64 ZIP into the workspace as a project.
+
+        The counterpart to export_project_zip, and the piece that makes a
+        remote instance usable: without it a project can leave the server but
+        never arrive. Entries are checked against the destination before
+        anything is written, so an archive carrying `../` or an absolute path
+        cannot place a file outside the project it claims to be.
+        """
+        import base64, io, zipfile
+        blob = a.get("zip_base64")
+        if not blob:
+            raise ValueError("zip_base64 is required")
+        p_name = (a.get("project_name") or "").strip()
+        if not p_name:
+            raise ValueError("project_name is required")
+        target = contained(workspace_root(), re.sub(r'[\\/:*?"<>|]', "_", p_name))
+        if target.exists() and not a.get("overwrite"):
+            raise ValueError(
+                f"'{p_name}' 이 이미 있습니다. 덮어쓰려면 overwrite=true 를 주십시오.")
+
+        try:
+            raw = base64.b64decode(blob, validate=True)
+        except Exception as exc:
+            raise ValueError(f"base64 디코드 실패: {exc}") from exc
+
+        written, skipped = [], []
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            names = [n for n in zf.namelist() if not n.endswith("/")]
+            # A zip may be wrapped in a single top directory; strip it so the
+            # project does not end up one level deeper than it was exported.
+            tops = {n.split("/", 1)[0] for n in names}
+            strip = len(tops) == 1 and all("/" in n for n in names)
+            for n in names:
+                rel = n.split("/", 1)[1] if strip else n
+                if not rel:
+                    continue
+                try:
+                    dest = contained(target, rel)
+                except PathEscape:
+                    skipped.append(n)
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(zf.read(n))
+                written.append(rel)
+
+        # The upload succeeded once the files are on disk. Switching to the new
+        # project is a convenience on top, and an archive that is missing a
+        # prompt fails to parse — reporting that as a failed upload would send
+        # the caller to re-send the whole zip over something already done.
+        switched, switch_error, previous = False, None, self.project_root
+        if a.get("auto_switch", True):
+            build = target / "build" if (target / "build").is_dir() else target
+            try:
+                self.project_root = str(build)
+                self.reload()
+                switched = True
+            except Exception as exc:
+                self.project_root = previous
+                self.reload()
+                switch_error = f"{type(exc).__name__}: {exc}"
+
+        return {"success": True, "project": target.name, "path": str(target),
+                "files_written": len(written), "files": written[:40],
+                "rejected_paths": skipped,
+                "switched": switched, "switch_error": switch_error,
+                "active_project": Path(self.project_root).parent.name}
+
     def tool_get_template(self, a: dict) -> dict:
         t_name = a.get("template_name", "main_prompt")
         name = a.get("name", "인물 이름")
@@ -1260,6 +1432,30 @@ _PROVIDER = {"type": "string", "description": "ollama | openrouter | gemini | op
 
 TOOL_SCHEMAS = {
 
+    "list_prompt_sections": {"name": "list_prompt_sections", **_s(
+        "프롬프트의 헤딩 목록과 섹션별 글자 수를 조회합니다. edit_prompt_section 에 넣을 heading 을 여기서 확인합니다.",
+        variant={"type": "string", "description": "safe | unsafe | default"})},
+    "edit_prompt_section": {"name": "edit_prompt_section", **_s(
+        "프롬프트의 특정 섹션만 교체합니다. 전문을 다시 보내지 않아도 되므로 한 줄 수정에 안전합니다.",
+        heading={"type": "string", "description": "교체할 섹션 헤딩 (예: '## 이미지 출력 규칙')", "_required": True},
+        content={"type": "string", "description": "새 섹션 내용. 헤딩을 포함하지 않으면 기존 헤딩을 유지합니다", "_required": True},
+        target={"type": "string", "description": "main | prologue | opening_situation (기본 main)"},
+        variant={"type": "string", "description": "safe | unsafe | default"})},
+    "list_free_models": {"name": "list_free_models", **_s(
+        "OpenRouter 에서 현재 무료로 쓸 수 있는 모델을 조회하고, 이 하네스의 프롬프트 길이를 감당할 만한 것을 추천합니다.",
+        limit={"type": "integer", "description": "반환 개수 (기본 20)"})},
+    "set_api_key": {"name": "set_api_key", **_s(
+        "프로바이더 API 키를 이 서버에 저장합니다. 파일 권한 600 으로 저장되며 응답에 키를 다시 싣지 않습니다. "
+        "빈 문자열을 주면 삭제합니다.",
+        provider={"type": "string", "description": "gemini | openrouter | openai", "_required": True},
+        key={"type": "string", "description": "API 키. 빈 값이면 삭제"})},
+    "import_project_zip": {"name": "import_project_zip", **_s(
+        "base64 로 인코딩한 ZIP 을 워크스페이스에 풀어 프로젝트로 등록합니다. export_project_zip 의 짝으로, "
+        "원격 서버에 작품을 올릴 때 씁니다.",
+        zip_base64={"type": "string", "description": "ZIP 파일의 base64 문자열", "_required": True},
+        project_name={"type": "string", "description": "생성할 프로젝트 디렉터리 이름", "_required": True},
+        overwrite={"type": "boolean", "description": "기존 프로젝트를 덮어쓸지 (기본 false)"},
+        auto_switch={"type": "boolean", "description": "업로드 후 해당 프로젝트로 전환 (기본 true)"})},
     "get_template": {"name": "get_template", **_s(
         "메인 프롬프트(main_prompt), 캐릭터(character), 프롤로그(prologue), 시작상황(start_prompt)의 표준 뼈대 양식을 불러옵니다. 모델은 이 양식을 받아 창작 내용을 채워넣으면 됩니다.",
         template_name={"type": "string", "description": "main_prompt | character | prologue | start_prompt", "_required": True},
@@ -1475,8 +1671,11 @@ TOOL_SCHEMAS = {
         project_name={"type": "string", "description": "내보낼 프로젝트 이름 (생략 시 현재 활성 프로젝트)"},
         target_dir={"type": "string", "description": "내보낼 대상 디렉터리 경로 (생략 시 원본 프로젝트 경로)"})},
     "export_project_zip": {"name": "export_project_zip", **_s(
-        "프로젝트 전체 빌드 산출물과 에셋을 ZIP 압축 아카이브로 패키징하고, 에이전트 및 유저가 즉시 내려받을 수 있는 다운로드 URL 링크를 반환합니다.",
-        project_name={"type": "string", "description": "ZIP으로 압축할 프로젝트 이름 (생략 시 현재 활성 프로젝트)"})},
+        "빌드 산출물(build/)을 ZIP 으로 패키징합니다. as_base64=true 면 내용을 base64 로 함께 반환하므로 "
+        "원격 인스턴스에 import_project_zip 으로 그대로 넘길 수 있습니다. 프로젝트 루트의 원본 이미지 폴더는 포함하지 않습니다.",
+        project_name={"type": "string", "description": "ZIP으로 압축할 프로젝트 이름 (생략 시 현재 활성 프로젝트)"},
+        as_base64={"type": "boolean", "description": "ZIP 내용을 base64 문자열로 함께 반환"},
+        max_bytes={"type": "integer", "description": "base64 로 실어 보낼 최대 원본 크기 (기본 8MB)"})},
     "sync_to_crack_draft": {"name": "sync_to_crack_draft", **_s(
         "Playwright 브라우저 자동화를 실행하여 크랙(Crack) 웹 에디터에 제목/한줄소개/프롬프트/키워드북을 자동 주입하고 [임시저장(Draft Save)] 버튼만 안전하게 클릭합니다. (최종 발행은 절대 진행하지 않음)",
         target_url={"type": "string", "description": "크랙 에디터 또는 로그인 페이지 URL (기본값 https://crack.wrtn.ai)"},

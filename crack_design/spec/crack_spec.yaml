@@ -204,7 +204,10 @@ extension:
 # ── LLM 프로바이더 ────────────────────────────────────────────────
 # OpenAI 호환 /chat/completions 만 사용. base_url 교체로 백엔드 전환.
 llm:
-  provider: ollama           # 아래 providers 키 중 하나. CLI --provider 로 덮어씀
+  # 이 하네스는 대부분 에이전트가 구동한다. 에이전트는 자기가 응답을 써서
+  # play_turn(reply=...) 로 넣으므로 외부 API 가 필요 없고, 기본값이 실제 모델이면
+  # 키가 없다는 이유로 첫 턴부터 실패한다. 사람이 직접 돌릴 때 --provider 로 바꾼다.
+  provider: agent            # 아래 providers 키 중 하나. CLI --provider 로 덮어씀
   temperature: 0.9
   max_tokens: 2048
   timeout: 300
