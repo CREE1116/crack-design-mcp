@@ -56,7 +56,10 @@ _IMG_PLAIN = re.compile(r"!\[([^\]]*)\]\((https?://\S+?)\)")
 _FENCE_LABEL = re.compile(r"```([A-Za-z][A-Za-z0-9_-]{0,20})\b")
 _SITUATION = re.compile(r"상황\s*=\s*((?:[sS]\d{2}\S*\s*)+)")
 _SIT_CODE = re.compile(r"([sS]\d{2})")
-_RESTRICT = re.compile(r"([sS]\d{2})\s*은?\s*(\d{2})\s*[~-]\s*(\d{2})\s*만")
+# Either "s18은 01~11만 보유" or, where the prefix was declared once and
+# dropped to save characters, "18입맞춤(01~11만 보유)".
+_RESTRICT = re.compile(
+    r"(?:([sS]\d{2})\s*은?|\b(\d{2})[^\d\n(]{0,8}\()\s*(\d{2})\s*[~-]\s*(\d{2})\s*만")
 _HUD_FIELD = re.compile(r"\[([^\]\n]{1,14})\]")
 
 
@@ -127,8 +130,9 @@ def detect(main_prompt: str, hud_example: str | None) -> Contract:
             if low not in seen:
                 seen.add(low)
                 c.situation_codes.append(low)
-    for code, lo, hi in _RESTRICT.findall(main_prompt):
-        c.restricted_codes[code.lower()] = [f"{n:02d}" for n in range(int(lo), int(hi) + 1)]
+    for pref, bare, lo, hi in _RESTRICT.findall(main_prompt):
+        code = (pref or f"s{bare}").lower()
+        c.restricted_codes[code] = [f"{n:02d}" for n in range(int(lo), int(hi) + 1)]
 
     # ── prohibitions: only claim them when the prompt says so ──
     impersonation = re.search(

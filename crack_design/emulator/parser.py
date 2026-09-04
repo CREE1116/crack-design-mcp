@@ -27,7 +27,10 @@ _ROSTER = re.compile(r"^▶(?:(\d{2})\.)?([^:：\[]+)[:：]\s*\[(.*)\]\s*$", re.
 _IMG_TEMPLATE = re.compile(r"!\[[^\]]*\]\((https?://[^)]*?)\{")
 _SITUATION = re.compile(r"상황\s*=\s*((?:s\d{2}\S*\s*)+)")
 _SIT_CODE = re.compile(r"(s\d{2})")
-_RESTRICT = re.compile(r"(s\d{2})\s*은?\s*(\d{2})\s*[~-]\s*(\d{2})\s*만")
+# Either "s18은 01~11만 보유" or, where the prefix was declared once and dropped
+# to save characters, "18입맞춤(01~11만 보유)".
+_RESTRICT = re.compile(
+    r"(?:(s\d{2})\s*은?|\b(\d{2})[^\d\n(]{0,8}\()\s*(\d{2})\s*[~-]\s*(\d{2})\s*만")
 _FENCE = re.compile(r"^```[a-zA-Z]*\n(.*?)\n```\s*$", re.S)
 
 
@@ -354,8 +357,16 @@ def parse_image_rule(main_prompt: str) -> ImageRule:
             if code not in seen:
                 seen.add(code)
                 codes.append(code)
+    if not codes:
+        # `상황(sNN)=01차분 02호감 …` — the prefix declared once and then dropped,
+        # which is how a build fits the table inside the character budget.
+        compact = re.search(r"상황\(sNN\)\s*=\s*([^\n]+)", main_prompt)
+        if compact:
+            codes = [f"s{n}" for n in
+                     sorted(set(re.findall(r"(?:^|\s)(\d{2})", compact.group(1))))]
     restricted: dict[str, list[str]] = {}
-    for code, lo, hi in _RESTRICT.findall(main_prompt):
+    for pref, bare, lo, hi in _RESTRICT.findall(main_prompt):
+        code = (pref or f"s{bare}").lower()
         restricted[code] = [f"{n:02d}" for n in range(int(lo), int(hi) + 1)]
 
     # Only claim the every-turn / every-line duties where the prompt asks for
