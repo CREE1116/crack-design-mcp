@@ -27,7 +27,13 @@ assembly:
     - story_state_level_def   # "[Story State Level Definition]"
     - stat_definition
     - keyword_output          # "## keyword output"  ({{img::키워드}} 규칙)
-    - previous_history        # "[Previous History]"
+    # [USER-OBSERVED] 환각 게이트를 통과한 세션에서 "[Previous History] 바로 다음 줄"을
+    # 물으니 "[최근 사건 타임라인]" 이 나왔다. 두 가지가 동시에 확인된다:
+    #   1) 이 인접 순서는 역공학 덤프와 일치한다 (교차검증됨)
+    #   2) [Previous History] 헤더 아래에는 본문이 붙지 않는다 — 대화 이력은
+    #      이 자리에 인라인으로 들어가지 않고 별도 chat message 로 들어간다.
+    #      우리 assembler 가 이미 그렇게 하고 있으므로 그대로 둔다.
+    - previous_history        # "[Previous History]"  (헤더만, 본문 없음)
     - recent_timeline         # "[최근 사건 타임라인]"  ← 요약메모리
     - character_relations     # "[캐릭터 관계도]"
     - given_goal              # "[주어진 목표]"
