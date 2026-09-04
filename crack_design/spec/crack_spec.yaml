@@ -39,6 +39,9 @@ assembly:
     - given_goal              # "[주어진 목표]"
     - system_message          # "[System Message]"
   # 이후 실제 대화 이력이 chat messages 로 들어감
+  # [DISPUTED] 덤프에는 "=" 구분선이 있으나, 게이트를 통과한 세션에 "=" 연속 구간이
+  # 있느냐고 묻자 "없음" 이라고 답했다. 부정 증거는 긍정 증거보다 약해(못 본 것일 수도
+  # 있다) 일단 유지하되, 긍정형 질문으로 재확인이 필요하다.
   separator: "=================================================="
   tail_blocks:
     - user_message            # "[User Message]" + 이번 입력
@@ -69,9 +72,12 @@ memory:
   summary_store: null
   relation_store: null
   longterm_store: null
-  summary_slots: 4           # [OBSERVED] 관찰 시점 "[최근 사건 타임라인]" 에 4개가 실려 있었음
-  recalled_slots: 3          # [OBSERVED] "장기 메모리는 기준은 모르겠지만 딱 3개만 들어감"
-  relation_slots: 5          # [OBSERVED] "[캐릭터 관계도]" 5개
+  # [USER-OBSERVED] 다른 작품·다른 세션(약 258턴)에서 직접 세어 4 / 3 / 5 가 그대로
+  # 재현되었다. 역공학 덤프의 숫자와 일치하므로 우연이 아니라 주입 상한이 맞다.
+  # 저장은 별개로 무제한이라는 관찰과도 모순되지 않는다 — 쌓아두고 일부만 싣는다.
+  summary_slots: 4           # "[최근 사건 타임라인]" 항목 4개
+  recalled_slots: 3          # "<recalled_history>" 항목 3개
+  relation_slots: 5          # "[캐릭터 관계도]" 5줄 (항목 수가 아니라 줄 수로 셌음)
   # [UNVERIFIED] 크랙의 장기기억 선정 기준 불명(출처도 "기준은 모르겠지만"이라 명시).
   # 크랙은 벡터 검색이 아니라 텍스트 기반으로 보이므로 임베딩 경로는 구현하지 않는다.
   # [USER-OBSERVED] <recalled_history> 축자 인용. 항목은 `### 제목` 과
@@ -99,6 +105,9 @@ memory:
   # 같은 요약메모리 영역에 나란히 있어 장기메모리 기능으로 보고 기본을 auto 로 둔다.
   #   auto   : 형제 블록처럼 모델이 갱신. 유저가 명시한 목표는 잠겨 덮어쓰지 않음
   #   manual : 세션에 기입된 값만 사용
+  # [USER-OBSERVED] 전투 직후 입원한 상황에서 [주어진 목표] 가
+  # "완벽하게 회복하여 일상으로 복귀하고 서리화와 함께 평온한 시간을 보내는 것." 이었다.
+  # 유저가 타이핑한 문장이 아니라 현재 국면에서 유도된 값 — auto 기본값을 뒷받침한다.
   goal_source: auto          # auto | manual
   goal_max_chars: 120
   # [USER-OBSERVED] 실제 세션의 장기기억 턴번호가 ⌛85 → ⌛107 → ⌛114 로 간격 22, 7.

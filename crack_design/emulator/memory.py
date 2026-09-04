@@ -53,10 +53,17 @@ def _longterm_prompt(cfg: Config, max_chars: int) -> str:
         criteria="\n".join(f"- {c}" for c in criteria) or "- 나중에 다시 참조될 사건",
     )
 
+# [USER-OBSERVED] 관계도 항목은 한 줄 요약이 아니라 제목 + 산문 블록이다:
+#     ### 서리화 (A급 헌터 / 부협회장)
+#     크리의 아내이자 직속상관. 크리의 무모한 행동에 분노하면서도 그를 깊이 신뢰함. …
+# 퇴장한 인물도 남는다 (### 리에발트 (군주) / EX급 재앙. … 완전히 소멸함.)
 RELATION_SYSTEM = (
-    "너는 롤플레이 세션의 관계 기록 담당이다. 대화에서 등장인물과 플레이어의 관계 상태를 "
-    "인물당 한 줄로 정리한다. 형식: `이름 — 관계단계 / 최근 변화 근거`. "
-    "최대 {slots}줄. 등장하지 않은 인물은 쓰지 않는다. 추측 금지. 목록만 출력."
+    "너는 롤플레이 세션의 관계 기록 담당이다. 대화에 등장한 인물별로 아래 형식으로 정리한다.\n"
+    "형식(인물당 2줄):\n"
+    "1줄: ### 이름 (직함 또는 등급)\n"
+    "2줄: 플레이어와의 관계와 현재 태도를 사실 위주로 서술. 최근 변화가 있으면 함께 적는다.\n"
+    "규칙: 등장하지 않은 인물은 쓰지 않는다. 퇴장하거나 사망한 인물도 그 결말을 적어 남긴다. "
+    "추측 금지. 전체 {slots}줄 이내. 다른 말 붙이지 말고 형식대로만 출력."
 )
 
 
@@ -172,7 +179,8 @@ def update_relations(session: Session, cfg: Config, window_turns: int, llm) -> N
         max_tokens=512,
         temperature=0.2,
     ).strip()
-    lines = [ln.strip("-• \t") for ln in text.splitlines() if ln.strip()]
+    # Keep the "### 이름" heading markers: they are part of the observed shape.
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
     store = cfg.get("memory.relation_store")
     session.relations = lines[:int(store)] if store else lines
 
