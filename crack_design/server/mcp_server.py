@@ -249,7 +249,15 @@ class Server:
                           for t in s.turns]}
 
     def tool_list_sessions(self, a: dict) -> dict:
-        return {"store": str(self.store.root), "sessions": self.store.list()}
+        """Sessions for the active project. Pass all_projects to see the store."""
+        if a.get("all_projects"):
+            return {"store": str(self.store.root), "scope": "all_projects",
+                    "sessions": self.store.entries()}
+        entries = self.store.entries(self.project_root)
+        return {"store": str(self.store.root), "scope": "active_project",
+                "project_root": self.project_root,
+                "sessions": entries,
+                "hidden_other_projects": len(self.store.orphans(self.project_root))}
 
     def tool_delete_session(self, a: dict) -> dict:
         sid = a["session"]
@@ -1169,7 +1177,10 @@ TOOL_SCHEMAS = {
         input={"type": "string", "description": "그 응답을 만든 플레이어 입력"},
         session={"type": "string"})},
     "get_session": {"name": "get_session", **_s("세션 전체 기록.", session=_SESSION)},
-    "list_sessions": {"name": "list_sessions", **_s("저장된 세션 목록.")},
+    "list_sessions": {"name": "list_sessions", **_s(
+        "현재 활성 프로젝트에 속한 세션 목록만 조회합니다. 세션 파일에 기록된 "
+        "project_root 로 걸러지므로 다른 작품의 세션은 나타나지 않습니다.",
+        all_projects={"type": "boolean", "description": "true 면 프로젝트 구분 없이 스토어 전체를 조회"})},
     "delete_session": {"name": "delete_session", **_s(
         "세션과 발동 로그를 삭제합니다.", session=_SESSION)},
     "get_memory": {"name": "get_memory", **_s(

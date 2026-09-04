@@ -239,7 +239,8 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/project":
                 return self._json(self._project_payload())
             if url.path == "/api/sessions":
-                return self._json({"sessions": self.state.store.list()})
+                return self._json({"sessions": self.state.store.list(self.state.project_root),
+                                   "project_root": self.state.project_root})
             if url.path == "/api/session":
                 sid = (q.get("id") or [""])[0]
                 if not sid or not self.state.store.exists(sid):
@@ -290,7 +291,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.state.store.root.parent / "logs").delete(sid)
                 return self._json({"ok": True, "id": sid, "session_removed": removed,
                                    "log_removed": log_removed,
-                                   "sessions": self.state.store.list()})
+                                   "sessions": self.state.store.list(
+                                       self.state.project_root)})
             if url.path == "/api/check":
                 return self._json(self._check(body))
             if url.path == "/api/memory":

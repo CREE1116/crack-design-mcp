@@ -363,9 +363,14 @@ def cmd_sessions(args) -> int:
     store = Store(args.store)
     log = ActivationLog(args.logs or store.root.parent / "logs")
 
+    # Scope every listing and, above all, every delete to the project the
+    # command was pointed at. --delete-all against a shared store would
+    # otherwise wipe sessions belonging to projects the user never named.
+    scope = None if getattr(args, "all_projects", False) else args.project
+
     targets: list[str] = []
     if args.delete_all:
-        targets = store.list()
+        targets = store.list(scope)
     elif args.delete:
         targets = list(args.delete)
 
@@ -375,15 +380,18 @@ def cmd_sessions(args) -> int:
             removed.append({"id": sid, "session": store.delete(sid),
                             "log": log.delete(sid)})
         out = {"store": str(store.root), "removed": removed,
-               "sessions": store.list()}
+               "sessions": store.list(scope)}
         _emit(out, args.json, lambda o: [
             print(("deleted " if r["session"] else "not found ") + r["id"]
                   + (" (+log)" if r["log"] else ""))
             for r in o["removed"]])
         return EXIT_OK
 
-    out = {"store": str(store.root), "sessions": store.list()}
-    _emit(out, args.json, lambda o: print("\n".join(o["sessions"]) or "(none)"))
+    out = {"store": str(store.root), "project_root": scope,
+           "sessions": store.entries(scope)}
+    _emit(out, args.json,
+          lambda o: print("\n".join(f"{e['id']}  ({e['turns']} turns)"
+                                    for e in o["sessions"]) or "(none)"))
     return EXIT_OK
 
 
@@ -449,7 +457,10 @@ def build_parser() -> argparse.ArgumentParser:
     add("spec", "dump the effective spec").set_defaults(fn=cmd_spec)
     p = add("sessions", "list or delete stored sessions")
     p.add_argument("--delete", nargs="+", metavar="ID", help="delete these sessions")
-    p.add_argument("--delete-all", action="store_true", help="delete every session")
+    p.add_argument("--delete-all", action="store_true",
+                   help="delete this project's sessions (not the whole store)")
+    p.add_argument("--all-projects", action="store_true",
+                   help="operate on the whole store instead of --project's sessions")
     p.add_argument("--logs", help="log directory (default: <store>/../logs)")
     p.set_defaults(fn=cmd_sessions)
 
