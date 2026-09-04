@@ -357,7 +357,21 @@ def parse_image_rule(main_prompt: str) -> ImageRule:
     restricted: dict[str, list[str]] = {}
     for code, lo, hi in _RESTRICT.findall(main_prompt):
         restricted[code] = [f"{n:02d}" for n in range(int(lo), int(hi) + 1)]
-    return ImageRule(base_url=base, situation_codes=codes, restricted_codes=restricted)
+
+    # Only claim the every-turn / every-line duties where the prompt asks for
+    # them in so many words; a build that never says so is not held to them.
+    scene_codes = sorted(set(re.findall(r"bg(\d{2})", main_prompt)))
+    require_scene = bool(re.search(
+        r"배경[^\n]{0,20}(?:매\s?응답|매\s?턴)[^\n]{0,20}(?:필수|반드시)"
+        r"|(?:매\s?응답|매\s?턴)[^\n]{0,20}배경[^\n]{0,20}(?:필수|반드시)", main_prompt))
+    require_portrait = bool(re.search(
+        r"발화마다[^\n]{0,40}(?:필수|반드시)"
+        r"|연속\s?발화[^\n]{0,30}매번[^\n]{0,20}출력", main_prompt))
+
+    return ImageRule(base_url=base, situation_codes=codes, restricted_codes=restricted,
+                     require_scene_each_turn=require_scene,
+                     require_portrait_each_line=require_portrait,
+                     scene_codes=[f"bg{c}" for c in scene_codes])
 
 
 def parse_hud_example(main_prompt: str) -> str | None:

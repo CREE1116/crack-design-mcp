@@ -53,6 +53,12 @@ class ImageRule:
     base_url: str | None
     situation_codes: list[str]
     restricted_codes: dict[str, list[str]]  # code -> character numbers allowed
+    # Some builds ask for a background on every response and a portrait above
+    # every line, with repeats explicitly required rather than skipped. Read off
+    # the prompt so a build that says nothing is not held to it.
+    require_scene_each_turn: bool = False
+    require_portrait_each_line: bool = False
+    scene_codes: list[str] = field(default_factory=list)
 
 
 @dataclass

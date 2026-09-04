@@ -351,6 +351,29 @@ def _check_images(response: str, project: Project, prev_response: str | None,
                                "이미지 바로 아래 줄이 대사가 아님", i, nxt[:60],
                                "# 8. 이미지 출력 규칙"))
 
+    # ── 매 발화·매 턴 이미지 계약 ─────────────────────────────────
+    # The contract asks for a background at the top of every response and a
+    # portrait above every ⓒ line, with no skipping on repeats. Neither can be
+    # checked by looking at one image at a time, so they are counted here.
+    if getattr(rule, "require_scene_each_turn", False):
+        first = next((ln.strip() for ln in lines if ln.strip()), "")
+        if not (_IMG_ANY.search(first) and _is_scene_image(_IMG_ANY.search(first).group(2))):
+            out.append(Finding("scene_image_missing", ERROR,
+                               "응답 최상단에 배경 이미지가 없음", 1, first[:60],
+                               "# 8. 이미지 출력 규칙"))
+
+    if getattr(rule, "require_portrait_each_line", False):
+        for i, line in enumerate(lines, start=1):
+            m = dialogue_re.match(line.strip())
+            if not m:
+                continue
+            prev = lines[i - 2].strip() if i >= 2 else ""
+            pm = _IMG_ANY.search(prev)
+            if not pm or _is_scene_image(pm.group(2)):
+                out.append(Finding("portrait_image_missing", ERROR,
+                                   f"'{m.group(1).strip()}' 발화 위에 인물 이미지가 없음",
+                                   i, line.strip()[:60], "# 8. 이미지 출력 규칙"))
+
     # Once a response has called an adult code, a clothed emotion image landing
     # later in the same response breaks the scene on screen even though the
     # prose reads fine.
@@ -365,13 +388,16 @@ def _check_images(response: str, project: Project, prev_response: str | None,
                 break
 
     # same character repeated with the same situation code inside one response
-    seen: dict[str, str] = {}
-    for i, _label, num, sit in seq:
-        if seen.get(num) == sit:
-            out.append(Finding("image_repeat_same_emotion", WARN,
-                               f"인물 {num} 가 같은 감정({sit})으로 이미지 반복 출력",
-                               i, "", "# 8. 이미지 출력 규칙"))
-        seen[num] = sit
+    # Repeating a portrait is only a defect where the contract asks the model to
+    # skip repeats. A build that requires one above every line is doing as told.
+    if not getattr(rule, "require_portrait_each_line", False):
+        seen: dict[str, str] = {}
+        for i, _label, num, sit in seq:
+            if seen.get(num) == sit:
+                out.append(Finding("image_repeat_same_emotion", WARN,
+                                   f"인물 {num} 가 같은 감정({sit})으로 이미지 반복 출력",
+                                   i, "", "# 8. 이미지 출력 규칙"))
+            seen[num] = sit
 
     if prev_response:
         prev_last: dict[str, str] = {}
