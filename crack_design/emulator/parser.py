@@ -575,7 +575,11 @@ def lint(project: Project, max_entry_chars: int = 400,
         unicodedata.normalize("NFKC", t).casefold()
         for t in re.findall(r"\[([^\]\n]{1,14})\]", project.hud_example or "")
     }
+    # Everything the HUD prints, labels and value area alike. A keyword only
+    # has to survive one turn's status window to re-fire on the next.
+    hud_text = unicodedata.normalize("NFKC", project.hud_example or "").casefold()
     always_on: dict[tuple[str, str], set[str]] = {}
+    hud_body: dict[tuple[str, str], set[str]] = {}
     for variant in project.variants:
         entries = project.entries(variant)
         for rank, e in enumerate(entries, start=1):
@@ -591,15 +595,65 @@ def lint(project: Project, max_entry_chars: int = 400,
         for e in entries:
             for kw in e.keywords:
                 nk = unicodedata.normalize("NFKC", kw).casefold()
-                if len(nk) >= 2 and nk in hud_labels:
-                    always_on[(kw, e.title)] = always_on.get((kw, e.title), set())
-                    always_on[(kw, e.title)].add(variant)
+                if len(nk) < 2:
+                    continue
+                if nk in hud_labels:
+                    always_on.setdefault((kw, e.title), set()).add(variant)
+                elif nk in hud_text:
+                    # Not a bracket label, but still printed by the status
+                    # window. Whether it is fixed furniture (세계정복률 0.12%)
+                    # or a sample value that changes each turn (a character
+                    # standing somewhere) cannot be told from the example
+                    # alone, so this warns and says what to check.
+                    hud_body.setdefault((kw, e.title), set()).add(variant)
 
     for (kw, title), variants_hit in sorted(always_on.items()):
         add("error", "always_on_trigger",
             f"'{title}' 의 키워드 '{kw}' 가 상태창 고정 항목명 — "
             f"매 턴 발동해 3슬롯 중 1개를 영구 점유함",
             variant=",".join(sorted(variants_hit)), entry=title, keyword=kw)
+
+    for (kw, title), variants_hit in sorted(hud_body.items()):
+        add("warn", "hud_body_trigger",
+            f"'{title}' 의 키워드 '{kw}' 가 상태창 본문에 인쇄됨 — 고정 문구라면 "
+            f"직전 턴 상태창만으로 매 턴 재발동함. 매 턴 바뀌는 표본값인지 확인할 것",
+            variant=",".join(sorted(variants_hit)), entry=title, keyword=kw)
+
+    # A keyword that contains another keyword from the same entry can never be
+    # the reason the entry fires: the shorter one already matched. It costs a
+    # slot in the 1..5 budget and buys nothing.
+    subsumed: dict[tuple[str, str, str], set[str]] = {}
+    for variant in project.variants:
+        for e in project.entries(variant):
+            norm = {k: unicodedata.normalize("NFKC", k).casefold() for k in e.keywords}
+            for long_kw, long_n in norm.items():
+                for short_kw, short_n in norm.items():
+                    if short_kw != long_kw and short_n and short_n in long_n:
+                        subsumed.setdefault((long_kw, short_kw, e.title), set()).add(variant)
+    for (long_kw, short_kw, title), variants_hit in sorted(subsumed.items()):
+        add("error", "keyword_subsumed",
+            f"'{title}' 의 키워드 '{long_kw}' 는 같은 항목의 '{short_kw}' 에 이미 포함돼 "
+            f"단독으로 발동시킬 일이 없음 — 한 칸만 낭비. 삭제할 것",
+            variant=",".join(sorted(variants_hit)), entry=title, keyword=long_kw)
+
+    # A trigger phrase that appears nowhere in the author's own text is usually
+    # one invented for the trigger line alone. Measured against a 20-turn play
+    # session this predicted a dead keyword 88% of the time — high enough to
+    # ask about, not high enough to assert, since a player can still type a
+    # natural `고유명사+명사` pair like `미미 캐비닛` that was never written down.
+    for variant in project.variants:
+        entries = project.entries(variant)
+        corpus = unicodedata.normalize("NFKC", "\n".join(
+            [project.prologue, project.opening_situation, project.prompt(variant)]
+            + [e.content for e in entries])).casefold()
+        for e in entries:
+            for kw in e.keywords:
+                nk = unicodedata.normalize("NFKC", kw).casefold()
+                if len(nk) >= 2 and nk not in corpus:
+                    add("info", "keyword_absent_from_text",
+                        f"'{e.title}' 의 키워드 '{kw}' 가 프롬프트·프롤로그·항목 본문 "
+                        f"어디에도 없음 — 플레이어가 실제로 칠 표현인지 확인할 것",
+                        variant=variant, entry=e.title, keyword=kw)
 
     hazards: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
     for variant in project.variants:
