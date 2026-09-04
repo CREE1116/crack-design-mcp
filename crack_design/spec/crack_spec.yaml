@@ -126,6 +126,11 @@ memory:
   longterm_exclude: "단순한 칭찬·선물·가벼운 데이트·일상 대화, 일상적 임무 수행, 소모품 획득"
   # [MODEL-SELF-REPORT] "50자 내외, 감정 묘사 배제, 사실 위주"
   longterm_max_chars: 200
+  # [USER-OBSERVED] 타임라인 네 항목의 턴번호가 전부 [⌛259] 로 동일했다. 사건이 일어난
+  # 턴이 아니라 요약이 쓰인 턴이며, 따라서 이 블록은 갱신 때마다 통째로 다시 쓰인다.
+  # 항목을 누적하지 않는다. 작중 시각 기준 오래된 것이 위.
+  # [USER-OBSERVED] 모델은 <recalled_history> 에 실린 3개 말고 그 이전 항목은
+  # "볼 수 없음". 저장 자체가 없다는 뜻은 아니고(서버 측), 모델 쪽에서는 검증 불가.
   summarize_every_turns: 8   # [UNVERIFIED] 요약 갱신 주기
   summary_max_chars: 300     # [UNVERIFIED]
 

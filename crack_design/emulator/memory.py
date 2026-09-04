@@ -14,16 +14,21 @@ from .config import Config
 from .lexical import BM25
 from .models import Session, Turn
 
-# Observed shape of a Crack summary-memory entry: a scene name, a
-# date｜time｜place header, then the events. Matching it matters because the
-# header is what makes several summaries readable as a timeline.
+# [USER-OBSERVED] "[최근 사건 타임라인]" 축자. 항목마다 제목이 있고, 본문 앞에
+# 턴번호와 시각·장소가 붙는다:
+#     ### 저녁 식사
+#     [⌛259] 2027년 12월 10일｜19:45｜크리의 집 크리가 준비한 김치찌개를 …
+# 네 항목의 턴번호가 전부 [⌛259] 로 같았다. 사건이 일어난 턴이 아니라 요약이 쓰인
+# 턴이라는 뜻이고, 따라서 타임라인은 항목을 덧붙이는 것이 아니라 갱신 때마다 통째로
+# 다시 쓰인다. 작중 시각은 10:30 → 19:55 로 오래된 것이 위였다.
 SUMMARY_SYSTEM = (
-    "너는 롤플레이 세션의 기록 담당이다. 주어진 대화 조각을 아래 형식으로 압축한다.\n"
-    "형식(3줄):\n"
-    "1줄: 장면 이름 (예: 관악산 전투)\n"
-    "2줄: 날짜｜시각｜장소 (대화에 없으면 그 줄은 생략)\n"
-    "3줄: 사건 요약. 사건·결정·관계 변화만 남긴다. 묘사와 대사는 버린다.\n"
-    "규칙: 추측 금지. 전체 최대 {max_chars}자. 다른 말 붙이지 말고 형식대로만 출력."
+    "너는 롤플레이 세션의 기록 담당이다. 최근 대화를 장면 단위로 나눠 타임라인을 다시 쓴다.\n"
+    "형식(장면당 2줄):\n"
+    "1줄: ### 장면 이름\n"
+    "2줄: 날짜｜시각｜장소 뒤에 이어서 사건 요약 (대화에 없으면 그 부분은 생략)\n"
+    "규칙: 장면은 최대 {slots}개. 오래된 장면이 위, 최근이 아래. "
+    "사건·결정·관계 변화만 남긴다. 묘사와 대사는 버린다. 추측 금지. "
+    "장면당 최대 {max_chars}자. 다른 말 붙이지 말고 형식대로만 출력."
 )
 
 # Observed shape of a long-term entry: the turn number, then what happened.
@@ -131,41 +136,68 @@ def truncate_to_sentence(text: str, max_chars: int) -> str:
     return sliced.strip()
 
 
+def _split_scenes(text: str) -> list[tuple[str, str]]:
+    """-> [(title, body), ...] from the `### 제목` / 본문 pairs the model returns."""
+    scenes: list[tuple[str, str]] = []
+    title, body = "", []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if title or body:
+                scenes.append((title, " ".join(body).strip()))
+            title, body = stripped.lstrip("# ").strip(), []
+        elif stripped:
+            body.append(stripped)
+    if title or body:
+        scenes.append((title, " ".join(body).strip()))
+    return [(t, b) for t, b in scenes if b]
+
+
+def render_summary(item: dict) -> str:
+    """`### 저녁 식사` / `[⌛259] 2027년 …｜크리의 집 크리가 …`"""
+    if isinstance(item, str):
+        return item                      # sessions written before the shape existed
+    title = (item.get("title") or "").strip()
+    turn = item.get("turn")
+    body = (item.get("text") or "").strip()
+    stamp = f"[⌛{turn}] " if turn is not None else ""
+    head = f"### {title}" if title else ""
+    return "\n".join(x for x in (head, f"{stamp}{body}".strip()) if x)
+
+
 def update_summaries(session: Session, cfg: Config, window_turns: int, llm) -> bool:
-    """Compress newly evicted turns into one summary slot. Returns True if updated."""
-    evicted = evicted_turns(session, window_turns)
-    done = _summarized_count(session)
-    pending = evicted[done:]
-    if not pending:
+    """Rewrite `[최근 사건 타임라인]` in full. Returns True if it changed.
+
+    Every entry in the observed timeline carried the same turn stamp, so the
+    block is regenerated wholesale at the current turn rather than accumulated
+    one summary at a time. Rewriting also lets scenes merge and re-title as the
+    story moves, which an append-only log cannot do.
+    """
+    recent = live_turns(session, window_turns)
+    if not recent:
         return False
 
+    slots = int(cfg.get("memory.summary_slots", 4))
     max_chars = int(cfg.get("memory.summary_max_chars", 300))
+    turn = max((t.index for t in session.turns), default=0)
+
     text = llm.complete(
-        system=SUMMARY_SYSTEM.format(max_chars=max_chars),
-        messages=[{"role": "user", "content": _render(pending)}],
-        # Korean summaries run ~1.5 tokens/char; 300 chars needs well under
-        # this. The old 512 was tight enough that the model got clipped
-        # mid-sentence, which is what produced the broken slot in play.
+        system=SUMMARY_SYSTEM.format(slots=slots, max_chars=max_chars),
+        messages=[{"role": "user", "content": _render(recent)}],
         max_tokens=1024,
         temperature=0.2,
     ).strip()
 
-    summary_text = truncate_to_sentence(text, max_chars)
-    if not summary_text:
+    scenes = _split_scenes(text)
+    if not scenes:
         return False
+    rebuilt = [{"turn": turn, "title": t, "text": truncate_to_sentence(b, max_chars)}
+               for t, b in scenes[-slots:]]
 
-    # Dedup: if identical to the previous summary, avoid polluting summary slots
-    if session.summaries and summary_text == session.summaries[-1]:
-        session.stats["_summarized_turns"] = len(evicted)
-        return False
-
-    session.summaries.append(summary_text)
-    # Storage is uncapped by default; only the prompt injection is limited.
-    store = cfg.get("memory.summary_store")
-    if store:
-        session.summaries = session.summaries[-int(store):]
-    session.stats["_summarized_turns"] = len(evicted)
-    return True
+    before = [render_summary(x) for x in session.summaries]
+    session.summaries = rebuilt
+    session.stats["_summarized_turns"] = len(evicted_turns(session, window_turns))
+    return [render_summary(x) for x in rebuilt] != before
 
 
 def update_relations(session: Session, cfg: Config, window_turns: int, llm) -> None:

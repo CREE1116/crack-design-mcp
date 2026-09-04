@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from .activation import Activation
 from .config import Config
+from .memory import render_summary
 from .models import Project, Session, Shortcut, Turn
 
 REFUSAL_CLAUSE = (
@@ -69,13 +70,16 @@ def build_system_blocks(project: Project, session: Session, cfg: Config,
         "이미지 출력은 메인 프롬프트의 이미지 규칙을 따른다.",
     )
     b["previous_history"] = _block("[Previous History]", "")
+    # Entries carry their own `### 제목` heading and `[⌛턴]` stamp, so they are
+    # not numbered again here.
     b["recent_timeline"] = _block(
         "[최근 사건 타임라인]",
-        "\n".join(f"{i + 1}. {s}" for i, s in enumerate(session.summaries)) or "(없음)",
+        "\n".join(render_summary(x) for x in session.summaries) or "(없음)",
     )
+    # Relation lines already arrive as `### 이름` headings plus prose.
     b["character_relations"] = _block(
         "[캐릭터 관계도]",
-        "\n".join(f"- {r}" for r in session.relations) or "(없음)",
+        "\n".join(session.relations) or "(없음)",
     )
     # An empty goal is left out entirely rather than announced as "(미지정)":
     # telling the model there is no objective is worse than saying nothing.
