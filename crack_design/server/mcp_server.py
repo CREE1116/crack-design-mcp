@@ -642,13 +642,6 @@ class Server:
         self.reload()
         return res
 
-        """Delete a build or derived artifact file."""
-        name = a.get("name")
-        if not name:
-            raise ValueError("name is required")
-        res = self._mgr().delete_artifact(name)
-        self.reload()
-        return res
     def tool_write_main_prompt(self, a: dict) -> dict:
         """Write the entire integrated main prompt as a whole, measuring characters and alerting if > 7000."""
         content = a.get("content")
@@ -764,8 +757,9 @@ class Server:
             raise ValueError("title is required")
         if keywords is None or not isinstance(keywords, list):
             raise ValueError("keywords must be a list of strings")
-        if content is None:
-            raise ValueError("content is required")
+        keywords_only = bool(a.get("keywords_only"))
+        if content is None and not keywords_only:
+            raise ValueError("content is required (or pass keywords_only=true)")
 
         variant = a.get("variant") or "both"
         new_title = a.get("new_title")
@@ -786,12 +780,47 @@ class Server:
         if not targets:
             targets.append(kb_default)
 
-        from ..emulator.parser import update_keyword_book_entry
+        from ..emulator.parser import update_keyword_book_entry, read_keyword_book_entry
+
+        # SAFE and UNSAFE routinely carry different prose for the same entry,
+        # and keyword-book.md is written no matter which variant was asked for.
+        # Sending one body to all of them silently replaces the others' text,
+        # which is a content loss the caller never asked for: trimming a trigger
+        # list should not rewrite a sentence. Bodies that already differ from
+        # the incoming content are reported and left alone unless the caller
+        # says otherwise.
+        current = {}
+        for path in targets:
+            if path.exists():
+                current[path.name] = read_keyword_book_entry(
+                    path.read_text(encoding="utf-8"), title)
+
+        divergent = [n for n, body in current.items()
+                     if body is not None and content is not None
+                     and body.strip() != content.strip()]
+        overwrite = bool(a.get("overwrite_divergent"))
+        if divergent and not overwrite and not keywords_only:
+            return {
+                "ok": False,
+                "error": "body_divergence",
+                "title": title,
+                "divergent_files": divergent,
+                "message": (
+                    f"{', '.join(divergent)} 의 본문이 넘긴 content 와 다릅니다. "
+                    "그대로 쓰면 해당 변형의 문장이 덮어써집니다. "
+                    "트리거만 고치려면 keywords_only=true, "
+                    "정말 본문을 통일하려면 overwrite_divergent=true 를 주십시오."),
+                "current_bodies": current,
+            }
+
         updated_files = []
         is_update = False
         for path in targets:
             text = path.read_text(encoding="utf-8") if path.exists() else "# Keyword Book\n\n"
-            new_text, was_up = update_keyword_book_entry(text, title, keywords, content, new_title=new_title)
+            body = current.get(path.name) if keywords_only else content
+            if body is None:
+                body = content or ""
+            new_text, was_up = update_keyword_book_entry(text, title, keywords, body, new_title=new_title)
             path.write_text(new_text, encoding="utf-8")
             updated_files.append(path.name)
             is_update = is_update or was_up
@@ -1287,7 +1316,9 @@ TOOL_SCHEMAS = {
         "키워드북 항목을 신규 등록하거나 수정합니다. 400자 한도와 키워드 1~5개 규칙을 검증합니다.",
         title={"type": "string", "description": "항목 제목 (기존 제목)", "_required": True},
         keywords={"type": "array", "items": {"type": "string"}, "description": "발동 트리거 키워드 목록 (1~5개)", "_required": True},
-        content={"type": "string", "description": "항목 본문 내용 (400자 이하 권장)", "_required": True},
+        content={"type": "string", "description": "항목 본문 내용 (400자 이하 권장). keywords_only=true 면 생략 가능", "_required": True},
+        keywords_only={"type": "boolean", "description": "트리거 키워드만 교체하고 각 변형의 본문은 그대로 둡니다"},
+        overwrite_divergent={"type": "boolean", "description": "변형마다 본문이 다를 때도 넘긴 content 로 통일합니다"},
         new_title={"type": "string", "description": "제목을 변경할 경우 새 제목"},
         variant={"type": "string", "description": "safe | unsafe | both (기본값 both)"})},
     "delete_keyword_entry": {"name": "delete_keyword_entry", **_s(

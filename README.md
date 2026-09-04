@@ -41,9 +41,14 @@ Crack 스토리 챗 창작·검증·실시간 시뮬레이션 통합 하네스 &
 ## 3. 실행 방법
 
 ```bash
-# 원격 MCP 터널 및 웹 UI 동시 실행
-./run-chatgpt-mcp.sh
+./crack-mcp.sh up        # 서버 + 터널 기동, MCP URL 출력
+./crack-mcp.sh restart   # 서버만 재기동 — 터널 URL은 그대로 유지
+./crack-mcp.sh status    # 서버·터널·health 상태
+./crack-mcp.sh url       # 현재 MCP URL만 출력
+./crack-mcp.sh down      # 둘 다 정지
 ```
+
+`trycloudflare` 퀵터널은 cloudflared 가 재시작될 때마다 새 호스트명을 발급합니다. 클라이언트가 설정해 둔 주소가 깨지지 않도록 서버와 터널의 수명을 분리했으므로, 코드를 고친 뒤에는 `restart` 를 쓰십시오 — `up`/`down` 만 터널을 건드립니다.
 
 ### 환경 변수
 | 변수 | 기본값 | 용도 |

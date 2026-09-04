@@ -192,6 +192,25 @@ def parse_keyword_book(text: str, source: str) -> tuple[list[KeywordEntry], list
     return entries, shortcuts
 
 
+def read_keyword_book_entry(text: str, title: str) -> str | None:
+    """Body of one entry as it currently stands, or None if it is not there.
+
+    Callers that write to several variant files need to know what each one
+    already says before replacing it.
+    """
+    sc = _SC_SECTION.search(text)
+    kb_part = text[:sc.start()] if sc else text
+    heads = [m for m in _HEADING.finditer(kb_part)
+             if not _META_HEADING.match(m.group(2).strip())]
+    target = _clean_title(title).lower()
+    for i, m in enumerate(heads):
+        if _clean_title(m.group(2)).lower() != target:
+            continue
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(kb_part)
+        return parse_keyword_body(kb_part[m.start():end])
+    return None
+
+
 def update_keyword_book_entry(text: str, title: str, keywords: list[str], content: str,
                               new_title: str | None = None) -> tuple[str, bool]:
     """Update or insert a keyword entry in keyword book text.
