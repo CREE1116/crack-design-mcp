@@ -192,6 +192,55 @@ def parse_keyword_book(text: str, source: str) -> tuple[list[KeywordEntry], list
     return entries, shortcuts
 
 
+def reorder_keyword_book(text: str, order: list[str]) -> tuple[str, list[str]]:
+    """Rewrite the book so entries follow `order` (by title), rest keeps position.
+
+    Document order is what decides which entries survive the three-slot cap, so
+    promoting an entry that keeps getting dropped is a routine tuning move. It
+    was only reachable by hand-editing the file, which is why it lives here.
+
+    Returns (new_text, resulting_titles).
+    """
+    sc = _SC_SECTION.search(text)
+    kb_part, sc_part = (text[:sc.start()], text[sc.start():]) if sc else (text, "")
+    heads = [m for m in _HEADING.finditer(kb_part)
+             if not _META_HEADING.match(m.group(2).strip())]
+    if not heads:
+        return text, []
+
+    # A heading alone does not make an entry — the book's own title sits at the
+    # top and carries no `- 키워드:` line. Only real entries may be reordered;
+    # anything before the first one stays put as the preamble.
+    parsed: list[tuple[str, str, bool]] = []
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(kb_part)
+        block = kb_part[m.start():end]
+        parsed.append((_clean_title(m.group(2)), block.rstrip() + "\n\n",
+                       bool(_KW_LINE.search(block))))
+
+    first_entry = next((i for i, (_t, _b, is_entry) in enumerate(parsed) if is_entry), None)
+    if first_entry is None:
+        return text, []
+    preamble = kb_part[:heads[first_entry].start()]
+    blocks = [(t, b) for t, b, is_entry in parsed[first_entry:] if is_entry]
+    tail_nonentries = [b for t, b, is_entry in parsed[first_entry:] if not is_entry]
+
+    wanted = [_clean_title(t).lower() for t in order]
+    by_title = {t.lower(): (t, body) for t, body in blocks}
+    unknown = [t for t, low in zip(order, wanted) if low not in by_title]
+    if unknown:
+        raise ValueError(f"키워드북에 없는 제목: {unknown}")
+
+    promoted = [by_title[low] for low in wanted]
+    rest = [(t, b) for t, b in blocks if t.lower() not in set(wanted)]
+    ordered = promoted + rest
+
+    new_kb = preamble + "".join(body for _, body in ordered) + "".join(tail_nonentries)
+    new_text = new_kb.rstrip()
+    new_text += ("\n\n" + sc_part.lstrip()) if sc_part else "\n"
+    return new_text, [t for t, _ in ordered]
+
+
 def read_keyword_book_entry(text: str, title: str) -> str | None:
     """Body of one entry as it currently stands, or None if it is not there.
 

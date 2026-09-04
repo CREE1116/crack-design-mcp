@@ -1,7 +1,7 @@
 """Data model for a parsed Crack project and a running session."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 
@@ -142,6 +142,9 @@ class Session:
     relations: list[str] = field(default_factory=list)
     recalled: list[str] = field(default_factory=list)
     goal: str = ""
+    # [주어진 목표] is a long-term-memory slot the agent maintains. A goal the
+    # user set explicitly outranks that and is never overwritten.
+    goal_locked: bool = False
     stats: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -150,5 +153,10 @@ class Session:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Session":
+        d = dict(d)
         turns = [Turn(**t) for t in d.pop("turns", [])]
-        return cls(turns=turns, **d)
+        known = {f.name for f in fields(cls)}
+        # Sessions written before a field existed simply take its default, and
+        # a key this build no longer knows is dropped rather than crashing the
+        # load of an otherwise fine session file.
+        return cls(turns=turns, **{k: v for k, v in d.items() if k in known})

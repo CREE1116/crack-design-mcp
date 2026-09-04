@@ -59,7 +59,7 @@ class Engine:
         s = Session(id=session_id, project_root=self.project.root, variant=self.variant,
                     start_set=chosen.id if chosen else "build",
                     persona_name=persona_name, persona_body=persona_body,
-                    user_note=user_note, goal=goal)
+                    user_note=user_note, goal=goal, goal_locked=bool(goal.strip()))
         if seed_prologue and prologue:
             s.turns.append(Turn(index=0, role="assistant", content=prologue,
                                 meta={"source": chosen.source if chosen else "prologue.md"}))
@@ -147,6 +147,7 @@ class Engine:
             try:
                 memory.update_summaries(session, self.cfg, window, self.client)
                 memory.update_relations(session, self.cfg, window, self.client)
+                memory.update_goal(session, self.cfg, window, self.client)
             except Exception:
                 pass
 

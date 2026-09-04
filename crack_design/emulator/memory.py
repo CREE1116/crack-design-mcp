@@ -142,6 +142,40 @@ def update_relations(session: Session, cfg: Config, window_turns: int, llm) -> N
     session.relations = lines[:slots]
 
 
+GOAL_SYSTEM = (
+    "너는 롤플레이 세션의 목표 기록 담당이다. 대화에서 플레이어가 지금 추구하는 "
+    "당면 목표를 한 문장으로 적는다. 규칙: 이미 끝난 일은 쓰지 않는다. 추측 금지. "
+    "최대 {max_chars}자. 다른 말 붙이지 말고 목표 문장만 출력."
+)
+
+
+def update_goal(session: Session, cfg: Config, window_turns: int, llm) -> bool:
+    """Refresh `[주어진 목표]` from recent play. Returns True if it changed.
+
+    The block sits in the same summary-memory region as the timeline and the
+    relation map, both of which the model maintains, so this one is maintained
+    too. What the source dump does not say is who fills it, which is why the
+    behaviour is spec-driven; and a goal the user set by hand always wins.
+    """
+    if cfg.get("memory.goal_source", "auto") != "auto" or session.goal_locked:
+        return False
+    recent = live_turns(session, window_turns)
+    if not recent:
+        return False
+    max_chars = int(cfg.get("memory.goal_max_chars", 120))
+    text = llm.complete(
+        system=GOAL_SYSTEM.format(max_chars=max_chars),
+        messages=[{"role": "user", "content": _render(recent)}],
+        max_tokens=256,
+        temperature=0.2,
+    ).strip()
+    goal = truncate_to_sentence(text.splitlines()[0] if text else "", max_chars)
+    if not goal or goal == session.goal:
+        return False
+    session.goal = goal
+    return True
+
+
 def force_refresh(session: Session, cfg: Config, window_turns: int, llm) -> dict:
     """Summarise and re-derive relations right now, regardless of the interval."""
     before = (list(session.summaries), list(session.relations))
@@ -150,8 +184,13 @@ def force_refresh(session: Session, cfg: Config, window_turns: int, llm) -> dict
     if evicted[_summarized_count(session):]:
         summarised = update_summaries(session, cfg, window_turns, llm)
     update_relations(session, cfg, window_turns, llm)
+    goal_before = session.goal
+    goal_changed = update_goal(session, cfg, window_turns, llm)
     return {
         "summarised": summarised,
+        "goal_changed": goal_changed,
+        "goal_before": goal_before, "goal_after": session.goal,
+        "goal_locked": session.goal_locked,
         "summaries_before": before[0], "summaries_after": list(session.summaries),
         "relations_before": before[1], "relations_after": list(session.relations),
         "pending_turns": len(evicted) - _summarized_count(session),
@@ -174,6 +213,9 @@ def snapshot(project_root: str, session: Session, cfg: Config, window_turns: int
         "recalled_manual": list(session.recalled),
         "recalled_resolved": resolved,
         "recalled_selection": mode,
+        "goal": session.goal,
+        "goal_locked": session.goal_locked,
+        "goal_source": cfg.get("memory.goal_source", "auto"),
         "summarize_every_turns": int(cfg.get("memory.summarize_every_turns", 8)),
         "summarized_turns": _summarized_count(session),
         "window_turns": window_turns,

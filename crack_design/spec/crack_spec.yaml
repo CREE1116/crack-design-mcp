@@ -59,6 +59,12 @@ memory:
   # [UNVERIFIED] 크랙이 <recalled_history> 슬롯당 몇 자를 넣는지 미확인.
   # null = 자르지 않음(과거 동작). 값 지정 시 문장 경계에서 절단.
   recalled_max_chars: null
+  # [UNVERIFIED] "[주어진 목표]" 를 누가 채우는지 원문에 서술 없음. 타임라인·관계도와
+  # 같은 요약메모리 영역에 나란히 있어 장기메모리 기능으로 보고 기본을 auto 로 둔다.
+  #   auto   : 형제 블록처럼 모델이 갱신. 유저가 명시한 목표는 잠겨 덮어쓰지 않음
+  #   manual : 세션에 기입된 값만 사용
+  goal_source: auto          # auto | manual
+  goal_max_chars: 120
   summarize_every_turns: 8   # [UNVERIFIED] 요약 갱신 주기
   summary_max_chars: 300     # [UNVERIFIED]
 

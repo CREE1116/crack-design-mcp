@@ -227,7 +227,12 @@ class Server:
         p = eng.build_prompt(s, a.get("input") or "")
         window = int(eng.cfg.get("context.window_turns", 20))
         return {"system": p.system, "messages": p.messages, "char_count": p.char_count,
-                "activated": [x.entry.title for x in p.activations],
+                # Same key as play_turn: an agent driving both should not have
+                # to remember which one calls it what.
+                "activations": [{"title": x.entry.title, "matched": x.matched,
+                                 "where": x.where, "chars": x.entry.char_count}
+                                for x in p.activations],
+                "activated": [x.entry.title for x in p.activations],   # kept for compatibility
                 "dropped": [x.entry.title for x in p.dropped],
                 "live_turns": len(memory.live_turns(s, window)),
                 "evicted_turns": len(memory.evicted_turns(s, window))}
@@ -281,6 +286,87 @@ class Server:
             s.recalled = [x for x in a["recalled"] if x.strip()]
         self.store.save(s)
         return self.tool_get_memory(a)
+
+    def tool_set_goal(self, a: dict) -> dict:
+        """Write `[주어진 목표]` by hand, replacing or extending what is there.
+
+        The block is normally maintained as long-term memory, so a value set
+        here is locked: the per-turn refresh will not overwrite it again unless
+        the lock is lifted.
+        """
+        sess = self.store.load(a["session"])
+        goal = (a.get("goal") or "").strip()
+        mode = (a.get("mode") or "replace").strip().lower()
+        if mode not in ("replace", "append"):
+            raise ValueError("mode must be replace or append")
+        before = sess.goal
+
+        if a.get("unlock"):
+            sess.goal_locked = False
+            if not goal:
+                self.store.save(sess)
+                return {"session": sess.id, "goal": sess.goal, "goal_locked": False,
+                        "message": "잠금 해제 — 다음 갱신부터 모델이 다시 목표를 씁니다."}
+        if not goal and not a.get("unlock"):
+            raise ValueError("goal is required (or pass unlock=true)")
+
+        sess.goal = f"{before}\n{goal}".strip() if mode == "append" and before else goal
+        sess.goal_locked = not a.get("unlock", False)
+        self.store.save(sess)
+        return {"session": sess.id, "mode": mode, "goal_before": before,
+                "goal": sess.goal, "goal_locked": sess.goal_locked}
+
+    def tool_set_session_meta(self, a: dict) -> dict:
+        """Edit a live session's persona, user note or goal without restarting it.
+
+        These are set at start_session and were unreachable afterwards, which
+        makes the common case — noticing mid-play that the note is wrong —
+        require throwing the session away.
+        """
+        sess = self.store.load(a["session"])
+        changed = {}
+        for field_name in ("persona_name", "persona_body", "user_note"):
+            if a.get(field_name) is not None:
+                changed[field_name] = {"before": getattr(sess, field_name),
+                                       "after": a[field_name]}
+                setattr(sess, field_name, a[field_name])
+        if a.get("goal") is not None:
+            changed["goal"] = {"before": sess.goal, "after": a["goal"]}
+            sess.goal = a["goal"]
+            sess.goal_locked = True
+        if not changed:
+            raise ValueError("nothing to change: pass persona_name, persona_body, "
+                             "user_note or goal")
+        self.store.save(sess)
+        return {"session": sess.id, "changed": changed, "goal_locked": sess.goal_locked}
+
+    def tool_reorder_keyword_entries(self, a: dict) -> dict:
+        """Promote entries in the keyword book, which is what the 3 slots follow."""
+        order = a.get("order")
+        if not isinstance(order, list) or not order:
+            raise ValueError("order must be a non-empty list of entry titles")
+        variant = (a.get("variant") or "both").strip().lower()
+        root = Path(self.project_root)
+        targets = []
+        if variant in ("safe", "both"):
+            targets.append(root / "keyword-book-safe.md")
+        if variant in ("unsafe", "both"):
+            targets.append(root / "keyword-book-unsafe.md")
+        kb_default = root / "keyword-book.md"
+        if kb_default not in targets:
+            targets.append(kb_default)
+
+        from ..emulator.parser import reorder_keyword_book
+        results = {}
+        for path in targets:
+            if not path.exists():
+                continue
+            new_text, titles = reorder_keyword_book(
+                path.read_text(encoding="utf-8"), order)
+            path.write_text(new_text, encoding="utf-8")
+            results[path.name] = titles
+        self.reload()
+        return {"reordered": results, "note": "문서 순서가 3슬롯 우선순위입니다 (상단 우선)."}
 
     def tool_activation_report(self, a: dict) -> dict:
         sessions = a.get("sessions")
@@ -1207,6 +1293,25 @@ TOOL_SCHEMAS = {
         input={"type": "string", "description": "그 응답을 만든 플레이어 입력"},
         session={"type": "string"})},
     "get_session": {"name": "get_session", **_s("세션 전체 기록.", session=_SESSION)},
+    "set_goal": {"name": "set_goal", **_s(
+        "[주어진 목표] 블록을 직접 씁니다. 이 블록은 평소 장기메모리로서 모델이 갱신하지만, "
+        "여기서 설정하면 잠겨서 이후 자동 갱신이 덮어쓰지 않습니다.",
+        session=_SESSION,
+        goal={"type": "string", "description": "설정할 목표 문장"},
+        mode={"type": "string", "description": "replace(기본) | append — append 는 기존 목표에 줄을 추가"},
+        unlock={"type": "boolean", "description": "true 면 잠금을 풀어 모델이 다시 갱신하도록 되돌립니다"})},
+    "set_session_meta": {"name": "set_session_meta", **_s(
+        "진행 중인 세션의 페르소나·유저노트·목표를 세션을 버리지 않고 수정합니다.",
+        session=_SESSION,
+        persona_name={"type": "string"}, persona_body={"type": "string"},
+        user_note={"type": "string", "description": "매 턴 최하단 <system_note> 에 주입되는 지침"},
+        goal={"type": "string", "description": "[주어진 목표] (설정 시 잠김)"})},
+    "reorder_keyword_entries": {"name": "reorder_keyword_entries", **_s(
+        "키워드북 항목 순서를 바꿉니다. 문서 순서가 곧 3슬롯 우선순위(상단 우선)이므로, "
+        "계속 드롭되는 항목을 위로 올릴 때 씁니다. 지정하지 않은 항목은 뒤에 원래 순서로 남습니다.",
+        order={"type": "array", "items": {"type": "string"},
+               "description": "맨 위로 올릴 항목 제목들 (지정한 순서대로)", "_required": True},
+        variant={"type": "string", "description": "safe | unsafe | both (기본값 both)"})},
     "list_sessions": {"name": "list_sessions", **_s(
         "현재 활성 프로젝트에 속한 세션 목록만 조회합니다. 세션 파일에 기록된 "
         "project_root 로 걸러지므로 다른 작품의 세션은 나타나지 않습니다.",

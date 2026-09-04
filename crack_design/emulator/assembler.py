@@ -77,7 +77,9 @@ def build_system_blocks(project: Project, session: Session, cfg: Config,
         "[캐릭터 관계도]",
         "\n".join(f"- {r}" for r in session.relations) or "(없음)",
     )
-    b["given_goal"] = _block("[주어진 목표]", session.goal or "(미지정)")
+    # An empty goal is left out entirely rather than announced as "(미지정)":
+    # telling the model there is no objective is worse than saying nothing.
+    b["given_goal"] = _block("[주어진 목표]", session.goal) if session.goal.strip() else ""
     # Crack uploads start-prompt.md whole, so send the whole thing: the opening
     # situation drives turn one, and dropping it leaves the model with a parse
     # contract for a scene it was never told about.
