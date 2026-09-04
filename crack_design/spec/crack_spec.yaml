@@ -39,10 +39,13 @@ assembly:
     - given_goal              # "[주어진 목표]"
     - system_message          # "[System Message]"
   # 이후 실제 대화 이력이 chat messages 로 들어감
-  # [DISPUTED] 덤프에는 "=" 구분선이 있으나, 게이트를 통과한 세션에 "=" 연속 구간이
-  # 있느냐고 묻자 "없음" 이라고 답했다. 부정 증거는 긍정 증거보다 약해(못 본 것일 수도
-  # 있다) 일단 유지하되, 긍정형 질문으로 재확인이 필요하다.
-  separator: "=================================================="
+  # [USER-OBSERVED] 게이트를 통과한 세션에서 두 번 확인했다. "=" 연속 구간이 있느냐 →
+  # "없음". "[User Message]" 앞 3줄을 옮겨라 → "없음"(그 문자열 자체가 없음).
+  # 덤프는 둘 다 있다고 적었으나 관찰이 우선한다. 없는 문자열을 주입하면 그만큼
+  # QA 대상이 크랙이 아니게 되므로 기본값을 비운다. 덤프대로 재현하려면 값을 되돌린다.
+  separator: ""
+  # "[User Message]" 라벨. 빈 값이면 이번 입력이 라벨 없이 그대로 들어간다.
+  user_message_label: ""
   tail_blocks:
     - user_message            # "[User Message]" + 이번 입력
     - additional_info         # "## Additional Information & Rules"  ← 최하단 = 최강 우선순위
@@ -52,8 +55,9 @@ assembly:
     #     <system_note> … </system_note>
     #     <knowledge_base> …
     # 역공학 덤프가 적어둔 note→kb→recalled 순서는 틀렸다. 회상이 맨 앞이다.
-    # 축자 인용에 "[Story State — Reference Only]" 는 나타나지 않았다 — additional_info
-    # 바로 다음이 <recalled_history> 였다. 존재 여부 불명이라 순서에서 뺀다.
+    # [USER-OBSERVED] "[Story State" 로 시작하는 문자열이 있느냐고 직접 묻자 "없음".
+    # 축자 인용에서도 additional_info 다음이 곧바로 <recalled_history> 였다.
+    # 두 번 확인됐으므로 story_state_ref 블록은 조립에서 제외한다.
     - recalled_history        #   "<recalled_history>"   ← 장기기억. 이 구간 최상단
     - system_note             #   "<system_note>"        ← 유저노트
     - knowledge_base          #   "<knowledge_base>"     ← 발동된 키워드북

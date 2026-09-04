@@ -102,7 +102,10 @@ def build_tail_blocks(project: Project, session: Session, cfg: Config,
     body = user_input
     if shortcut and cfg.get("shortcut.route", "user_message") == "user_message":
         body = f"{user_input}\n\n[Shortcut: {shortcut.name}]\n{shortcut.prompt}"
-    b["user_message"] = _block("[User Message]", body)
+    # The observed context carried no "[User Message]" label, so the label is
+    # spec-driven and empty by default: the input goes in as itself.
+    label = cfg.get("assembly.user_message_label", "")
+    b["user_message"] = _block(label, body) if label else body
 
     b["additional_info"] = "## Additional Information & Rules"
     b["story_state_ref"] = _block(
@@ -138,13 +141,14 @@ def assemble(project: Project, session: Session, cfg: Config, variant: str,
 
     sys_order = cfg.get("assembly.system_blocks", list(sys_blocks))
     tail_order = cfg.get("assembly.tail_blocks", list(tail_blocks))
-    separator = cfg.get("assembly.separator", "=" * 50)
+    separator = cfg.get("assembly.separator", "") or ""
 
     system = "\n\n".join(sys_blocks[n] for n in sys_order if sys_blocks.get(n))
 
     messages: list[dict] = [{"role": t.role, "content": t.content} for t in history]
     tail = "\n\n".join(tail_blocks[n] for n in tail_order if tail_blocks.get(n))
-    messages.append({"role": "user", "content": f"{separator}\n{tail}"})
+    messages.append({"role": "user",
+                     "content": f"{separator}\n{tail}" if separator else tail})
 
     return AssembledPrompt(
         system=system,
