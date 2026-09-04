@@ -189,6 +189,11 @@ def update_summaries(session: Session, cfg: Config, window_turns: int, llm) -> b
     ).strip()
 
     scenes = _split_scenes(text)
+    # A generation that ran into its token ceiling ends mid-sentence, and that
+    # fragment would then ride in every later prompt. Drop the tail scene when
+    # it does not end like a finished sentence and something else survives.
+    if len(scenes) > 1 and not _COMPLETE_TAIL.search(scenes[-1][1]):
+        scenes = scenes[:-1]
     if not scenes:
         return False
     rebuilt = [{"turn": turn, "title": t, "text": truncate_to_sentence(b, max_chars)}
@@ -446,10 +451,16 @@ def select_recalled(session: Session, cfg: Config, window_turns: int,
 
     pool = [render_longterm(x) for x in session.longterm]
     if not pool:
+        # No summarised entries yet — a young session, or one recorded before
+        # they existed. The fallback reads the evicted turns directly, and it
+        # must not paste whole replies back in: a 400-word answer returned in
+        # full crowds out the live context it was supposed to supplement, and
+        # over-represents early scenes for the rest of the session. Sentences
+        # carry the fact without the bulk.
         evicted = evicted_turns(session, window_turns)
         if not evicted:
             return []
-        granularity = cfg.get("memory.recalled_granularity", "turn")
+        granularity = cfg.get("memory.recalled_granularity", "sentence")
         pool = _fragments(evicted) if granularity == "sentence" else [
             f"[{t.role}] {_strip_hud(t.content)}" for t in evicted
         ]

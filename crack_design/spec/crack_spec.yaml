@@ -108,10 +108,12 @@ memory:
   # [EXTENSION] lexical 모드에서 검색 단위. turn = 과거 응답 전문(크랙 기본 추정),
   # sentence = 문장 단위. 전문 매칭은 350단어 응답 하나가 통째로 경쟁·주입돼
   # 사실 하나 꺼내려고 컨텍스트를 크게 먹는다. 사실 단위 회수가 필요하면 sentence.
-  recalled_granularity: turn   # turn | sentence
+  recalled_granularity: sentence   # turn | sentence
   # [UNVERIFIED] 크랙이 <recalled_history> 슬롯당 몇 자를 넣는지 미확인.
   # null = 자르지 않음(과거 동작). 값 지정 시 문장 경계에서 절단.
-  recalled_max_chars: null
+  # 슬롯 하나가 먹는 문자 예산. null 이면 무제한인데, 요약 항목이 아직 없는 세션에서
+  # 폴백이 과거 응답을 통째로 실어 컨텍스트를 잡아먹는 것이 실제로 관측되어 기본값을 둔다.
+  recalled_max_chars: 300
   # [UNVERIFIED] "[주어진 목표]" 를 누가 채우는지 원문에 서술 없음. 타임라인·관계도와
   # 같은 요약메모리 영역에 나란히 있어 장기메모리 기능으로 보고 기본을 auto 로 둔다.
   #   auto   : 형제 블록처럼 모델이 갱신. 유저가 명시한 목표는 잠겨 덮어쓰지 않음
@@ -151,7 +153,9 @@ memory:
 context:
   # 크랙 실제 한도는 미확인. 고정값을 주장하지 않고 사용자가 정한다.
   # CLI `--window-turns` / `--window-tokens` 로 덮어쓸 것.
-  window_turns: 20           # 사용자 설정값. 크랙 실제값 아님
+  # 주의: 여기서 세는 단위는 "교환"이 아니라 메시지다. user/assistant 각각 1로 세므로
+  # 20 은 10교환에 해당한다. 크랙 실제값은 미확인이며 이 값은 사용자 설정값이다.
+  window_turns: 20           # 메시지 수. 사용자 설정값, 크랙 실제값 아님
   window_tokens: null        # null = 턴 기준만 사용
 
 # ── 키워드북 발동 ─────────────────────────────────────────────────

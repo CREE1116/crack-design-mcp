@@ -127,12 +127,26 @@ class Server:
         return {"findings": findings, "counts": counts,
                 "passed": counts.get("error", 0) == 0}
 
+    def _resolve_variant(self, requested: str | None) -> str:
+        """Pick a variant, and never quietly hand back a different one."""
+        if not requested:
+            return self.variant
+        requested = requested.strip().lower()
+        if requested in self.project.variants:
+            return requested
+        raise ValueError(
+            f"variant '{requested}' 는 이 프로젝트에 없습니다. "
+            f"사용 가능: {', '.join(self.project.variants)}")
+
     def tool_start_session(self, a: dict) -> dict:
         p_name = a.get("project_name") or a.get("project")
         if p_name:
             self.tool_switch_project({"project_name": p_name})
-        v = a.get("variant")
-        variant = v if v and v != "default" else self.variant
+        # "default" is a real variant — keyword-book.md / integrated-prompt.md —
+        # not a word meaning "whatever the server was started with". Treating it
+        # as the latter silently ran default sessions against SAFE, which is
+        # exactly the substitution that makes a variant test worthless.
+        variant = self._resolve_variant(a.get("variant"))
         eng = self._engine(self._overrides(a), variant=variant)
         sid = a["session"]
         if self.store.exists(sid) and a.get("overwrite"):
@@ -146,7 +160,12 @@ class Server:
                       start_set=a.get("start_set"))
         s = self.store.load(sid)
         chosen = self.project.start_set(s.start_set)
-        return {"session": s.id, "variant": s.variant, "start_set": s.start_set,
+        requested = (a.get("variant") or "").strip().lower()
+        return {"session": s.id, "variant": s.variant,
+                # Surface a substitution instead of letting it pass unnoticed.
+                "variant_requested": requested or None,
+                "variant_matches_request": (not requested) or requested == s.variant,
+                "start_set": s.start_set,
                 "turns": len(s.turns),
                 "prologue": s.turns[0].content if s.turns else "",
                 "opening_situation": chosen.opening_situation if chosen else ""}
@@ -156,7 +175,8 @@ class Server:
         if not self.store.exists(sid):
             raise ValueError(f"session '{sid}' not started; call start_session first")
         s = self.store.load(sid)
-        variant = a.get("variant") or s.variant or self.variant
+        variant = self._resolve_variant(a.get("variant")) if a.get("variant") \
+            else (s.variant or self.variant)
         eng = self._engine(self._overrides(a), variant=variant)
         for field in ("persona_name", "persona_body", "user_note", "goal"):
             if a.get(field) is not None:
@@ -175,7 +195,8 @@ class Server:
             raise ValueError(f"session '{sid}' not found. call start_session first")
         role = (a.get("role") or "player").strip().lower()
         s = self.store.load(sid)
-        variant = a.get("variant") or s.variant or self.variant
+        variant = self._resolve_variant(a.get("variant")) if a.get("variant") \
+            else (s.variant or self.variant)
         eng = self._engine(self._overrides(a), variant=variant)
 
         if role == "player":
@@ -222,7 +243,8 @@ class Server:
         sid = a["session"]
         s = self.store.load(sid) if self.store.exists(sid) else Session(
             id=sid, project_root=self.project.root, variant=a.get("variant") or self.variant)
-        variant = a.get("variant") or s.variant or self.variant
+        variant = self._resolve_variant(a.get("variant")) if a.get("variant") \
+            else (s.variant or self.variant)
         eng = self._engine(self._overrides(a), variant=variant)
         p = eng.build_prompt(s, a.get("input") or "")
         window = int(eng.cfg.get("context.window_turns", 20))
