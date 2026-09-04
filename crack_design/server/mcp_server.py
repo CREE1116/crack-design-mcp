@@ -233,7 +233,12 @@ class Server:
                                  "where": x.where, "chars": x.entry.char_count}
                                 for x in p.activations],
                 "activated": [x.entry.title for x in p.activations],   # kept for compatibility
-                "dropped": [x.entry.title for x in p.dropped],
+                # dropped mirrors activations' shape — it was a bare title list
+                # while its sibling held objects, which breaks any caller that
+                # walks both the same way.
+                "dropped": [{"title": x.entry.title, "matched": x.matched,
+                             "where": x.where, "chars": x.entry.char_count}
+                            for x in p.dropped],
                 "live_turns": len(memory.live_turns(s, window)),
                 "evicted_turns": len(memory.evicted_turns(s, window))}
 
