@@ -909,11 +909,14 @@ class Server:
                 current[path.name] = read_keyword_book_entry(
                     path.read_text(encoding="utf-8"), title)
 
-        divergent = [n for n, body in current.items()
-                     if body is not None and content is not None
-                     and body.strip() != content.strip()]
+        # The risk is one body being written over a *different* body in another
+        # variant — not the ordinary case of editing text. So the guard fires
+        # only when the target files disagree among themselves; rewriting the
+        # entry when they all currently say the same thing is just an edit.
+        existing = {n: b.strip() for n, b in current.items() if b is not None}
+        divergent = sorted(existing) if len({*existing.values()}) > 1 else []
         overwrite = bool(a.get("overwrite_divergent"))
-        if divergent and not overwrite and not keywords_only:
+        if divergent and not overwrite and not keywords_only and content is not None:
             return {
                 "ok": False,
                 "error": "body_divergence",
@@ -1379,8 +1382,10 @@ TOOL_SCHEMAS = {
     "get_current_project": {"name": "get_current_project", **_s(
         "현재 진입(활성화)되어 있는 프로젝트의 이름과 경로, 상태를 확인합니다.")},
     "create_project": {"name": "create_project", **_s(
-        "새로운 Crack 스토리-챗 프로젝트 디렉터리와 기본 마크다운 소스 파일(story.md, characters.md, build/)을 생성합니다.",
-        project_path={"type": "string", "description": "프로젝트를 생성할 디렉터리 경로"},
+        "새로운 Crack 스토리-챗 프로젝트 디렉터리와 기본 마크다운 소스 파일(story.md, characters.md, build/)을 "
+        "생성합니다. 위치는 항상 워크스페이스(CRACK_WORKSPACE, 기본 ~/crack) 아래이며 임의 경로는 받지 않습니다.",
+        project_name={"type": "string", "description": "디렉터리 이름 (생략 시 title 사용)"},
+        auto_switch={"type": "boolean", "description": "생성 후 해당 프로젝트로 전환 (기본 true)"},
         title={"type": "string", "description": "스토리 제목", "_required": True},
         premise={"type": "string", "description": "로그라인/핵심 시놉시스", "_required": True},
         player_role={"type": "string", "description": "플레이어의 역할/신분"})},
