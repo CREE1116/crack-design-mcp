@@ -68,8 +68,14 @@ RELATION_SYSTEM = (
     "1줄: ### 이름 (직함 또는 등급)\n"
     "2줄: 플레이어와의 관계와 현재 태도를 사실 위주로 서술. 최근 변화가 있으면 함께 적는다.\n"
     "규칙: 등장하지 않은 인물은 쓰지 않는다. 퇴장하거나 사망한 인물도 그 결말을 적어 남긴다. "
-    "추측 금지. 전체 {slots}줄 이내. 다른 말 붙이지 말고 형식대로만 출력."
+    "추측 금지.{limit} 다른 말 붙이지 말고 형식대로만 출력."
 )
+
+
+def _slots(cfg: Config, name: str) -> int | None:
+    """A slot budget, or None where the spec sets no limit."""
+    v = cfg.get(f"memory.{name}")
+    return int(v) if v else None
 
 
 def evicted_turns(session: Session, window_turns: int) -> list[Turn]:
@@ -165,6 +171,25 @@ def render_summary(item: dict) -> str:
     return "\n".join(x for x in (head, f"{stamp}{body}".strip()) if x)
 
 
+def parse_summary(text: str, turn: int) -> dict:
+    """Read `### 제목` / `[⌛N] 본문` back into the stored shape.
+
+    Summaries travel as rendered text at every boundary, so anything handed
+    back — a hand-edited memory slot, a session file from an older build — has
+    to survive the round trip.
+    """
+    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
+    title, body = "", " ".join(lines)
+    if lines and lines[0].startswith("#"):
+        title = lines[0].lstrip("# ").strip()
+        body = " ".join(lines[1:]).strip()
+    stamp = re.match(r"\[?⌛(\d+)\]?\s*", body)
+    if stamp:
+        turn = int(stamp.group(1))
+        body = body[stamp.end():]
+    return {"turn": turn, "title": title, "text": body}
+
+
 def update_summaries(session: Session, cfg: Config, window_turns: int, llm) -> bool:
     """Rewrite `[최근 사건 타임라인]` in full. Returns True if it changed.
 
@@ -177,12 +202,12 @@ def update_summaries(session: Session, cfg: Config, window_turns: int, llm) -> b
     if not recent:
         return False
 
-    slots = int(cfg.get("memory.summary_slots", 4))
+    slots = _slots(cfg, "summary_slots") or 0
     max_chars = int(cfg.get("memory.summary_max_chars", 300))
     turn = max((t.index for t in session.turns), default=0)
 
     text = llm.complete(
-        system=SUMMARY_SYSTEM.format(slots=slots, max_chars=max_chars),
+        system=SUMMARY_SYSTEM.format(slots=slots or "필요한 만큼", max_chars=max_chars),
         messages=[{"role": "user", "content": _render(recent)}],
         max_tokens=1024,
         temperature=0.2,
@@ -197,7 +222,7 @@ def update_summaries(session: Session, cfg: Config, window_turns: int, llm) -> b
     if not scenes:
         return False
     rebuilt = [{"turn": turn, "title": t, "text": truncate_to_sentence(b, max_chars)}
-               for t, b in scenes[-slots:]]
+               for t, b in (scenes[-slots:] if slots else scenes)]
 
     before = [render_summary(x) for x in session.summaries]
     session.summaries = rebuilt
@@ -205,21 +230,40 @@ def update_summaries(session: Session, cfg: Config, window_turns: int, llm) -> b
     return [render_summary(x) for x in rebuilt] != before
 
 
+def _relation_entries(lines: list[str]) -> list[list[str]]:
+    """Group `### 이름` + its prose into one entry each."""
+    out: list[list[str]] = []
+    for ln in lines:
+        if ln.lstrip().startswith("#") or not out:
+            out.append([ln])
+        else:
+            out[-1].append(ln)
+    return out
+
+
 def update_relations(session: Session, cfg: Config, window_turns: int, llm) -> None:
-    slots = int(cfg.get("memory.relation_slots", 5))   # asked of the model, not a store cap
+    # Counted in entries, not lines: an entry is two lines, so a line budget
+    # silently halves how many characters the map can hold.
+    slots = cfg.get("memory.relation_slots")
+    slots = int(slots) if slots else 0
     recent = live_turns(session, window_turns)
     if not recent:
         return
     text = llm.complete(
-        system=RELATION_SYSTEM.format(slots=slots),
+        system=RELATION_SYSTEM.format(
+            limit=f" 최대 {slots}명." if slots else ""),
         messages=[{"role": "user", "content": _render(recent)}],
         max_tokens=512,
         temperature=0.2,
     ).strip()
     # Keep the "### 이름" heading markers: they are part of the observed shape.
     lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    entries = _relation_entries(lines)
+    if slots:
+        entries = entries[:slots]
+    flat = [ln for e in entries for ln in e]
     store = cfg.get("memory.relation_store")
-    session.relations = lines[:int(store)] if store else lines
+    session.relations = flat[:int(store)] if store else flat
 
 
 GOAL_SYSTEM = (
@@ -375,11 +419,14 @@ def snapshot(project_root: str, session: Session, cfg: Config, window_turns: int
     mode = cfg.get("memory.recalled_selection", "recent")
     resolved = select_recalled(session, cfg, window_turns, query)
     return {
-        "summary_slots": int(cfg.get("memory.summary_slots", 4)),
-        "relation_slots": int(cfg.get("memory.relation_slots", 5)),
-        "recalled_slots": int(cfg.get("memory.recalled_slots", 3)),
-        "summaries": list(session.summaries),
+        # null travels as null: the panel renders it as unlimited rather than
+        # inventing a number.
+        "summary_slots": _slots(cfg, "summary_slots"),
+        "relation_slots": _slots(cfg, "relation_slots"),
+        "recalled_slots": _slots(cfg, "recalled_slots"),
+        "summaries": [render_summary(x) for x in session.summaries],
         "relations": list(session.relations),
+        "relation_entries": len(_relation_entries(list(session.relations))),
         "recalled_manual": list(session.recalled),
         "longterm_stored": len(session.longterm),
         "longterm": [render_longterm(x) for x in session.longterm[-8:]],
@@ -442,12 +489,11 @@ def select_recalled(session: Session, cfg: Config, window_turns: int,
     summaries existed has none, so it falls back to the evicted turns it does
     have rather than returning nothing.
     """
-    slots = int(cfg.get("memory.recalled_slots", 3))
+    raw_slots = cfg.get("memory.recalled_slots", 3)
+    slots = int(raw_slots) if raw_slots else 0        # 0/None = 제한 없음
     mode = cfg.get("memory.recalled_selection", "recent")
-    if slots <= 0:
-        return []
     if mode == "manual":
-        return _cap(session.recalled[:slots], cfg)
+        return _cap(session.recalled[:slots] if slots else list(session.recalled), cfg)
 
     pool = [render_longterm(x) for x in session.longterm]
     if not pool:
@@ -466,6 +512,6 @@ def select_recalled(session: Session, cfg: Config, window_turns: int,
         ]
 
     if mode == "lexical":
-        hits = BM25(pool).search(query, top_k=slots)
+        hits = BM25(pool).search(query, top_k=slots or len(pool))
         return _cap([pool[i] for i, _ in hits], cfg)
-    return _cap(pool[-slots:], cfg)
+    return _cap(pool[-slots:] if slots else pool, cfg)

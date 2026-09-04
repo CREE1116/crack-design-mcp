@@ -277,7 +277,8 @@ class Server:
         return {"session": s.id, "variant": s.variant, "start_set": s.start_set,
                 "persona_name": s.persona_name, "persona_body": s.persona_body,
                 "user_note": s.user_note, "goal": s.goal,
-                "summaries": s.summaries, "relations": s.relations,
+                "summaries": [memory.render_summary(x) for x in s.summaries],
+                "relations": s.relations,
                 "turns": [{"index": t.index, "role": t.role, "content": t.content}
                           for t in s.turns]}
 
@@ -306,7 +307,8 @@ class Server:
     def tool_set_memory(self, a: dict) -> dict:
         s = self.store.load(a["session"])
         if "summaries" in a:
-            s.summaries = [x for x in a["summaries"] if x.strip()]
+            s.summaries = [memory.parse_summary(x, i)
+                       for i, x in enumerate(a["summaries"]) if str(x).strip()]
         if "relations" in a:
             s.relations = [x for x in a["relations"] if x.strip()]
         if "recalled" in a:

@@ -453,7 +453,7 @@ function renderStats(res) {
     kv('이력 메시지', p.history_messages) +
     kv('system', p.system_chars + '자') +
     kv('총 프롬프트', p.total_chars + '자') +
-    kv('요약메모리', res.summaries.length + '/4') +
+    kv('요약메모리', res.summaries.length + '/' + (res.summary_slots || '∞')) +
     kv('장기기억', res.recalled.length + '/3') +
     (res.usage && res.usage.total_tokens ? kv('토큰', res.usage.total_tokens) : '');
 }
@@ -742,21 +742,21 @@ function renderMemory(m) {
   const stat = (v, l) => `<div class="memstat"><b>${v}</b><span>${esc(l)}</span></div>`;
   $('memBody').innerHTML =
     `<div class="memgrid">`
-    + stat(`${m.summaries.length}/${m.summary_slots}`, '요약메모리')
-    + stat(`${m.relations.length}/${m.relation_slots}`, '캐릭터 관계도')
-    + stat(`${m.recalled_resolved.length}/${m.recalled_slots}`, '장기기억')
+    + stat(`${m.summaries.length}/${m.summary_slots || '∞'}`, '요약메모리')
+    + stat(`${m.relation_entries}/${m.relation_slots || '∞'}`, '캐릭터 관계도')
+    + stat(`${m.recalled_resolved.length}/${m.recalled_slots || '∞'}`, '장기기억')
     + stat(m.pending_turns, '요약 대기 턴')
     + `</div>`
 
     + `<h4>요약메모리 · [최근 사건 타임라인]</h4>`
-    + `<div class="memnote">밀려난 턴을 압축해 ${m.summary_slots}칸에 넣습니다. `
+    + `<div class="memnote">밀려난 턴을 압축해 ${m.summary_slots || '무제한'}칸에 넣습니다. `
     + `${m.summarize_every_turns}턴마다 자동 갱신되며, ${m.summarized_turns}턴까지 요약했습니다. `
     + `직접 고쳐도 됩니다.</div>`
-    + slotRows('sum', m.summaries, m.summary_slots, '(빈 슬롯)')
+    + slotRows('sum', m.summaries, m.summary_slots || m.summaries.length, '(빈 슬롯)')
 
     + `<h4 style="margin-top:18px">캐릭터 관계도 · [캐릭터 관계도]</h4>`
     + `<div class="memnote">형식: <code>이름 — 관계단계 / 최근 변화 근거</code></div>`
-    + slotRows('rel', m.relations, m.relation_slots, '(빈 슬롯)')
+    + slotRows('rel', m.relations, m.relation_slots || m.relations.length, '(빈 슬롯)')
 
     + `<h4 style="margin-top:18px">장기기억 · &lt;recalled_history&gt;</h4>`
     + `<div class="memnote">현재 선정 방식 <b>${esc(m.recalled_selection)}</b>. `
@@ -764,7 +764,7 @@ function renderMemory(m) {
     + `대체 구현입니다. <code>recent</code>=밀려난 턴 중 최근 것, `
     + `<code>lexical</code>=어휘 매칭(벡터 아님), <code>manual</code>=아래에 직접 적은 것만.</div>`
     + (m.recalled_selection === 'manual'
-        ? slotRows('rec', m.recalled_manual, m.recalled_slots, '(직접 입력)')
+        ? slotRows('rec', m.recalled_manual, m.recalled_slots || Math.max(3, m.recalled_manual.length), '(직접 입력)')
         : `<div class="evicted">` + (m.recalled_resolved.length
             ? m.recalled_resolved.map((r, i) => `${i + 1}. ${esc(r)}`).join('<br>')
             : '(밀려난 턴이 없어 비어 있습니다)') + `</div>`

@@ -370,7 +370,8 @@ class Handler(BaseHTTPRequestHandler):
             "id": s.id, "variant": s.variant, "start_set": s.start_set,
             "persona_name": s.persona_name, "persona_body": s.persona_body,
             "user_note": s.user_note, "goal": s.goal,
-            "summaries": s.summaries, "relations": s.relations,
+            "summaries": [memory.render_summary(x) for x in s.summaries],
+                "relations": s.relations,
             "turns": [{"index": t.index, "role": t.role, "content": t.content,
                        "meta": t.meta} for t in s.turns],
         }
@@ -470,7 +471,8 @@ class Handler(BaseHTTPRequestHandler):
         with self.state.lock:
             session = self.state.store.load(body["id"])
             if "summaries" in body:
-                session.summaries = [x for x in body["summaries"] if x.strip()]
+                session.summaries = [memory.parse_summary(x, i)
+                                     for i, x in enumerate(body["summaries"]) if str(x).strip()]
             if "relations" in body:
                 session.relations = [x for x in body["relations"] if x.strip()]
             if "recalled" in body:

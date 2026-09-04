@@ -113,7 +113,7 @@ class Engine:
                     activations=[{"title": a.entry.title, "matched": a.matched, "where": a.where, "chars": a.entry.char_count} for a in prompt.activations],
                     dropped=[{"title": a.entry.title, "matched": a.matched, "where": a.where, "chars": a.entry.char_count} for a in prompt.dropped],
                     recalled=recalled,
-                    summaries=list(session.summaries),
+                    summaries=[memory.render_summary(x) for x in session.summaries],
                     findings=[dup_finding.to_dict()],
                     qa=qa.summarize([dup_finding]),
                     prompt_stats={
@@ -186,7 +186,7 @@ class Engine:
             activations=activations,
             dropped=dropped,
             recalled=memory.select_recalled(session, self.cfg, window, user_input),
-            summaries=list(session.summaries),
+            summaries=[memory.render_summary(x) for x in session.summaries],
             findings=[x.to_dict() for x in findings],
             qa=qa.summarize(findings),
             prompt_stats={
