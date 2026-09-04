@@ -17,6 +17,12 @@ from .webui import Handler, State
 
 class MCPHTTPHandler(Handler):
     server_version = "crack-emu-http/0.1.0"
+    # cloudflared pools its connections to the origin. Under the default
+    # HTTP/1.0 the origin closes after every response, and the tunnel returns
+    # 502 the moment it reuses a socket the origin already dropped — which is
+    # why single curl calls looked fine while a real MCP client failed.
+    # Every response path below therefore has to send a Content-Length.
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         if self.path != "/health":
@@ -79,8 +85,7 @@ class MCPHTTPHandler(Handler):
             super().do_POST()
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            req = json.loads(self.rfile.read(length))
+            req = json.loads(self._read_body())
             if not isinstance(req, dict):
                 raise ValueError("JSON-RPC request must be an object")
             method = req.get("method")
@@ -89,6 +94,7 @@ class MCPHTTPHandler(Handler):
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", "Bearer")
                 self._headers("application/json; charset=utf-8")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             response = self.app.mcp.handle(req)
@@ -120,6 +126,7 @@ class MCPHTTPHandler(Handler):
 
 class MCPHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
     def __init__(self, address: tuple[str, int], mcp: Server, endpoint: str,
                  auth_token: str | None, cors_origin: str):

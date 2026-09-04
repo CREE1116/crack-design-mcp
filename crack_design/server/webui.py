@@ -133,6 +133,9 @@ def _overrides(body: dict) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Keep-alive for the same reason as the MCP handler: cloudflared reuses
+    # origin connections and 502s when an HTTP/1.0 origin closes them.
+    protocol_version = "HTTP/1.1"
     state: State  # injected
 
     server_version = "crack-emu"
@@ -157,9 +160,29 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
                    "application/json; charset=utf-8")
 
+    def _read_body(self) -> bytes:
+        """Read the request body, chunked or not.
+
+        A proxy is free to re-frame the body it forwards, and cloudflared does:
+        it can drop Content-Length and stream the request chunked instead.
+        Reading Content-Length alone then yields an empty body and every call
+        comes back 400, but only from the tunnel — never from localhost.
+        """
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            buf = bytearray()
+            while True:
+                line = self.rfile.readline().strip()
+                size = int(line.split(b";")[0] or b"0", 16)
+                if size == 0:
+                    self.rfile.readline()        # trailing CRLF
+                    break
+                buf += self.rfile.read(size)
+                self.rfile.readline()            # CRLF after each chunk
+            return bytes(buf)
+        return self.rfile.read(int(self.headers.get("Content-Length", "0") or 0))
+
     def _read_json(self) -> dict:
-        n = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(n) or b"{}")
+        return json.loads(self._read_body() or b"{}")
 
     # ── routes ────────────────────────────────────────────────────
     def do_GET(self):  # noqa: N802
